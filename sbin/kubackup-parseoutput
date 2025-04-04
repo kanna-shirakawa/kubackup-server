@@ -1,0 +1,616 @@
+#!/usr/bin/perl -w
+#
+# __copy1__
+# __copy2__
+#
+use strict;
+
+my $CMD		= "kubackup-parseoutput";
+my $CMDVER	= "2.9";
+my $CMDSTR	= "$CMD v$CMDVER (2020/05)";
+
+my $LIBDIR	= "__LIB__/lang";
+   $LIBDIR	= "../lang"	if (! -d $LIBDIR);	# DEBUG
+
+my $Debug	= 0;
+my $LANGFILE;
+
+my $CURTIME;
+my $CURSYS;
+my $SAVESYS;
+
+my $DISK_LABEL	= "";
+my $DISK_SIZE	= 0;
+my $DISK_FREE	= 0;
+my $DISK_USED	= 0;
+my $DISK_PERCENT = 9;
+
+# after / ongoing infos, undefined up to first update
+my $DISK_ASIZE;
+my $DISK_AFREE;
+my $DISK_AUSED;
+my $DISK_APERCENT;
+
+my $TIME_START;
+my $TIME_END;
+
+my @SYSTEMS;
+my %SYS;
+
+my $T_SIZE	= 0;
+my $T_WRITTEN	= 0;
+my $T_TIME	= 0;
+
+
+my $lineno	= 0;
+
+my %PO_;
+
+if (defined $ARGV[0] && $ARGV[0] eq "-D") {
+	$Debug	= 1;
+	shift( @ARGV );
+}
+
+usage()	if (scalar(@ARGV));
+
+load_langfile( $CMD );
+
+while (<>) {
+	$lineno ++;
+	chomp();
+	parse_line( $_ );
+}
+
+printf( "\n" );
+printf( _T('head-disk-space'), $DISK_LABEL, $DISK_SIZE );
+printf( "\n" );
+printf( _T('head-bck-start'), $DISK_FREE, $DISK_USED, $DISK_PERCENT );
+if (defined $DISK_AFREE) {
+	printf( _T('head-bck-end'), $DISK_AFREE, $DISK_AUSED, $DISK_APERCENT,
+		(diffsize($DISK_AFREE,$DISK_FREE) > 0) ? '+' : '',
+		fmtsize(diffsize($DISK_AFREE,$DISK_FREE), 1)
+	);
+}
+printf( "\n" );
+
+my ($sysname, $fsname, $fmt);
+my $sep = "-" x 40;
+
+
+
+
+# systems summary
+
+$fmt	= " %-25.25s %-1.1s  %10.10s %10.10s  %10.10s %-10.10s\n";
+
+printf( _T('sys-title') );
+printf( $fmt, _T('sys-system'), "c", _T('sys-start'), _T('sys-end'), _T('sys-time'), _T('sys-status') );
+printf( $fmt, $sep, $sep, $sep, $sep, $sep, $sep );
+
+foreach $sysname (@SYSTEMS) {
+	my $sys	= $SYS{$sysname};
+	printf( $fmt,
+		$sysname,
+		$sys->{CACHE},
+		fmttime( $sys->{TSTART} ),
+		fmttime( $sys->{TEND} ),
+		timediff( $sys->{TSTART}, $sys->{TEND} ),
+		$sys->{STATUS},
+	);
+}
+printf( $fmt, $sep, $sep, $sep, $sep, $sep, $sep );
+printf( $fmt, _T('sys-totals'), "",
+	fmttime( $TIME_START ),
+	fmttime( $TIME_END ),
+	timediff( $TIME_START, $TIME_END ),
+	"",
+);
+printf( "\n" );
+
+
+
+# filesystems summary
+
+$fmt	= " %-25.25s %-25.25s %10.10s %10.10s %12.12s\n";
+
+printf( _T('fs-title') );
+printf( $fmt, "", "", _T('fs-orig'), _T('fs-copied'), _T('fs-speed') );
+printf( $fmt, _T('fs-sys'), _T('fs-name'), _T('fs-start'), _T('fs-end'), _T('fs-time') );
+printf( $fmt, $sep, $sep, $sep, $sep, $sep );
+
+foreach $sysname (@SYSTEMS) {
+	my $outsys	= $sysname;
+	my $sys		= $SYS{$sysname};
+	foreach $fsname (@{ $sys->{FSLIST} }) {
+		my $fs	= $sys->{$fsname};
+
+		if ($fsname eq "(pre)" || $fsname eq "(post)") {
+			printf( $fmt, $outsys, $fsname,
+				fmttime( $fs->{TSTART} ),
+				fmttime( $fs->{TEND} ),
+				sprintf( "%8s", timediff( $fs->{TSTART}, $fs->{TEND} ) )
+			);
+		} else {
+			printf( $fmt, $outsys, $fsname,
+				fmtsize( $fs->{TOTAL}, 1 ),
+				fmtsize( $fs->{WRITTEN}, 1 ),
+				#$fs->{STATUS},
+				fmtsize( $fs->{SPEED}, 1 ) . "/sec",
+			);
+			$T_SIZE		+= $fs->{TOTAL};
+			$T_WRITTEN	+= $fs->{WRITTEN};
+		}
+		$outsys	= "";
+	}
+}
+
+printf( $fmt, $sep, $sep, $sep, $sep, $sep );
+printf( $fmt, _T('fs-totals'), "",
+	fmtsize( $T_SIZE, 1 ),
+	fmtsize( $T_WRITTEN, 1 ),
+	"" );
+printf( "\n" );
+printf( "\n" );
+
+exit( 0 );
+
+
+
+
+
+sub strip_line_time
+{
+	# 20100725 202623 P9173   disk label: KLABS02
+	my ($line)	= @_;
+	my @tmp		= split( /[ \t]+/, $line );
+	$CURTIME	= $tmp[1];
+	my $out		= $_[0];
+	$out		=~ s/^\d\d\d\d\d\d\d\d \d\d\d\d\d\d P[0-9]+ +//;
+	return $out;
+}
+
+sub parse_line
+{
+	my ($line)	= @_;
+	$line		= strip_line_time( $line );
+	my $line_no_sys	= $line;
+	   $line_no_sys	=~ s/^\([a-zA-Z0-9-_.]+\) +//;
+	my $number	= "[0-9,.]+";
+
+	my @tmp		= split( /[ \t]+/, $line );
+
+	if ($Debug) {
+		pdebug( "eval line='%s'\n", $line );
+		pdebug( "     line_no_sys='%s'\n", $line_no_sys );
+		for ($_=0;$_<scalar(@tmp);$_++) {
+			pdebug( "  tmp[%s]='%s'\n", $_, $tmp[$_] );
+		}
+	}
+
+	CASE: {
+		# disk label: KLABS02
+		if ($line =~ /^disk label: /) {
+			$DISK_LABEL	= $tmp[2];
+			last CASE;
+		}
+
+
+		# STARTED P1743 kubackup-run server
+		#
+		if ($tmp[0] eq 'STARTED') {
+			$TIME_START = $CURTIME;
+			last CASE;
+		}
+
+		# disk free:    97G, usage   1.7T of   1.8T (95%) before backup
+		#
+		if ($line =~ /^disk free.*before backup/) {
+			pdebug( "line: disk free before\n" );
+			$DISK_SIZE	= $tmp[6];
+			$DISK_USED	= $tmp[4];
+			$DISK_FREE	= $tmp[2]; $DISK_FREE =~ s/,//;
+			$DISK_PERCENT	= $tmp[7]; $DISK_PERCENT =~ s/[)(]//g;
+			last CASE;
+		}
+
+		# (after each system)
+		#
+		# disk free:    97G, usage   1.7T of   1.8T (95%) after sys bldvua1
+		#
+		if ($line =~ /^disk free.*after sys /) {
+			pdebug( "line: disk free after sys\n" );
+			$DISK_AUSED	= $tmp[4];
+			$DISK_AFREE	= $tmp[2]; $DISK_AFREE =~ s/,//;
+			$DISK_APERCENT	= $tmp[7]; $DISK_APERCENT =~ s/[)(]//g;
+			last CASE;
+		}
+
+
+		# (end of backup)
+		#
+		# disk free:    97G, usage   1.7T of   1.8T (95%) after backup
+		#
+		if ($line =~ /^disk free.*after backup/) {
+			pdebug( "line: disk free after backup\n" );
+			$TIME_END 	= $CURTIME;
+			$DISK_AUSED	= $tmp[4];
+			$DISK_AFREE	= $tmp[2]; $DISK_AFREE =~ s/,//;
+			$DISK_APERCENT	= $tmp[7]; $DISK_APERCENT =~ s/[)(]//g;
+			last CASE;
+		}
+
+		# starting system: linsrv
+		# starting system: windoze (direct)
+		# executing PRE script /etc/kubackup/....
+		# executing POST script /etc/kubackup/....
+		# including PRE script ...."
+		if ($line =~ /^starting system: / || $line =~ /^executing.*script/ || $line =~ /^including /) {
+			my $sys		= {};
+			if ($line =~ /^starting/) {
+				$CURSYS		= $tmp[2];
+				pdebug( "line: starting CURSYS='%s'\n", $CURSYS );
+			} else {
+				$tmp[3]		=~ s#.*/##;
+				if ($line =~ / PRE /) {
+					$CURSYS	= "[PRE] " . $tmp[3];
+				} else {
+					$CURSYS	= "[POST] " . $tmp[3];
+				}
+				pdebug( "line: starting pre/post CURSYS='%s'\n", $CURSYS );
+			}
+			$SYS{$CURSYS}	= $sys;
+			$sys->{CACHE}	= "";
+			$sys->{TSTART}	= $CURTIME;
+			$sys->{FSNAME}	= [];
+			$sys->{STATUS}	= "MISSING";
+			push( @SYSTEMS, $CURSYS );
+			last CASE;
+		}
+
+		# (linsrv)    mirroring /etc
+		if ($line =~ / mirroring /) {
+			my $fs		= {};
+			my $fsname	= $line;
+			   $fsname	=~ s/.* mirroring +//;
+			   $fsname	= normalize_fsname( $fsname );
+			pdebug( "line: mirroring CURSYS='%s' fsname='%s'\n", $CURSYS, $fsname );
+			$SYS{$CURSYS}->{$fsname} = $fs;
+			$fs->{TSTART}	= $CURTIME;
+			$fs->{TEND}	= $CURTIME;
+			$fs->{TOTAL}	= 0;
+			$fs->{WRITTEN}	= 0;
+			$fs->{STATUS}	= "MISSING";
+			push( @{ $SYS{$CURSYS}->{FSLIST} }, $fsname );
+			last CASE;
+		}
+		# (linsrv)    ok	/etc
+		if ($line =~ / ok /) {
+			my $fsname	= $line_no_sys;
+			   $fsname	=~ s/ok +//;
+			   $fsname	= normalize_fsname( $fsname );
+			my $fs		= $SYS{$CURSYS}->{$fsname};
+			pdebug( "line: ok CURSYS='%s' fsname='%s'\n", $CURSYS, $fsname );
+			$fs->{TEND}	= $CURTIME;
+			$fs->{STATUS}	= "ok";
+			last CASE;
+		}
+
+		# (linsrv)    ERR   on /etc (status=10)
+		if ($line =~ / ERR * on /) {
+			my $fsname	= $line_no_sys;
+			   $fsname	=~ s/.* ERR * on +//;
+			   $fsname	=~ s/ .status=.*//;
+			   $fsname	= normalize_fsname( $fsname );
+			my $fs		= $SYS{$CURSYS}->{$fsname};
+			pdebug( "line: err CURSYS='%s' fsname='%s'\n", $CURSYS, $fsname );
+			$fs->{TEND}	= $CURTIME;
+			$fs->{STATUS}	= "ERROR!";
+			last CASE;
+		}
+
+
+		# (linsrv)  exiting ok
+		if ($line =~ / exiting ok/) {
+			pdebug( "line: exiting ok CURSYS='%s' (prev)\n", $CURSYS );
+			$SYS{$CURSYS}->{STATUS}	= "ok";
+			last CASE;
+		}
+
+		# (linsrv)  exiting with errors!
+		if ($line =~ / exiting with errors/) {
+			pdebug( "line: exiting err CURSYS='%s' (prev)\n", $CURSYS );
+			$SYS{$CURSYS}->{STATUS}	= "ERROR!";
+			last CASE;
+		}
+
+		# (linsrv) /etc/ sent 80947 bytes	received 67 bytes  23146.86 bytes/sec
+		if ($line =~ / sent $number bytes/) {
+			my $fsname	= $line_no_sys;
+			   $fsname	=~ s/ sent $number bytes.*//;
+			   $fsname	= normalize_fsname( $fsname );
+			my $fs		= $SYS{$CURSYS}->{$fsname};
+			my $written	= $line_no_sys; $written =~ s/.* received ($number) bytes.*/$1/;
+			my $speed	= $line_no_sys; $speed =~ s/.* received $number bytes +($number) bytes.*/$1/;
+			pdebug( "line: sent CURSYS='%s' fsname='%s' written='%s' speed='%s'\n", $CURSYS, $fsname, $written, $speed );
+			$written	=~ s/,//g;
+			$speed		=~ s/,//g;
+			$fs->{WRITTEN}	= $written;
+			$fs->{SPEED}	= $speed;
+			last CASE;
+		}
+
+		# (linsrv) /etc/ total size is 15728691  speedup is 194.15
+		if ($line =~ / total size is /) {
+			my $fsname	= $line_no_sys;
+			   $fsname	=~ s/ total size is .*//;
+			   $fsname	= normalize_fsname( $fsname );
+			my $fs		= $SYS{$CURSYS}->{$fsname};
+			my $tsize	= $line_no_sys; $tsize =~ s/.* total size is //; $tsize =~ s/ .*//; $tsize =~ s/,//g;
+			pdebug( "line: sent CURSYS='%s' fsname='%s' tsize='%s'\n", $CURSYS, $fsname, $tsize );
+			$fs->{TOTAL}	= $tsize;
+			last CASE;
+		}
+
+
+
+		# (linsrv) ended status 0
+		if ($line =~ / ended status /) {
+			pdebug( "line: end CURSYS='%s'\n", $CURSYS );
+			$SYS{$CURSYS}->{TEND} = $CURTIME;
+			$CURSYS = "";
+			last CASE;
+		}
+
+		# ended PRE script /etc/kubackup/....
+		# end-incl PRE script /etc/kubackup/....
+		if ($line =~ /^ended.*script/ || $line =~ /^end-incl /) {
+			$SYS{$CURSYS}->{TEND}	= $CURTIME;
+			$SYS{$CURSYS}->{STATUS}	= "ok";
+			$CURSYS = "";
+			last CASE;
+		}
+
+		# ERR 2 executing PRE script ...
+		if ($line =~ /^ERR .* executing P/) {
+			$SYS{$CURSYS}->{TEND}	= $CURTIME;
+			$SYS{$CURSYS}->{STATUS}	= "ERROR! $tmp[1]";
+			$CURSYS = "";
+			last CASE;
+		}
+
+		# system ews039 unreachable, skipped
+		if ($line =~ /system .* unreachable/) {
+			$CURSYS	= $tmp[1];
+			push( @SYSTEMS, $CURSYS );
+			$SYS{$CURSYS}->{STATUS}	= "offline";
+			$SYS{$CURSYS}->{TSTART}	= $CURTIME;
+			$SYS{$CURSYS}->{TEND}	= $CURTIME;
+			$SYS{$CURSYS}->{CACHE}	= "";
+			$CURSYS	= "";
+			last CASE;
+		}
+
+		#  $sys  cache preload started
+		if ($line =~ / cache preload started/) {
+			my $sys		= {};
+			$SAVESYS	= $CURSYS;
+			$CURSYS		= "$tmp[0]                                cache-preload";
+			$SYS{$CURSYS}	= $sys;
+			$sys->{CACHE}	= "r";
+			$sys->{TSTART}	= $CURTIME;
+			$sys->{FSNAME}	= [];
+			$sys->{STATUS}	= "MISSING";
+			push( @SYSTEMS, $CURSYS );
+			last CASE;
+		}
+
+		#  $sys  cache update started
+		if ($line =~ / cache update started/) {
+			my $sys		= {};
+			$SAVESYS	= $CURSYS;
+			$CURSYS		= "$tmp[0]                                cache-update";
+			$SYS{$CURSYS}	= $sys;
+			$sys->{CACHE}	= "w";
+			$sys->{TSTART}	= $CURTIME;
+			$sys->{FSNAME}	= [];
+			$sys->{STATUS}	= "MISSING";
+			push( @SYSTEMS, $CURSYS );
+			last CASE;
+		}
+
+		#  $sys  cache prev-copy started on _
+		if ($line =~ / cache prev-copy started/) {
+			my $sys		= {};
+			my $fs		= $tmp[-1];
+			$SAVESYS	= $CURSYS;
+			$CURSYS		= "  $fs                               cache-prev-copy";
+			$SYS{$CURSYS}	= $sys;
+			$sys->{CACHE}	= "c";
+			$sys->{TSTART}	= $CURTIME;
+			$sys->{FSNAME}	= [];
+			$sys->{STATUS}	= "MISSING";
+			push( @SYSTEMS, $CURSYS );
+			last CASE;
+		}
+
+		#  $sys  cache preload done, status=0
+		if ($line =~ / cache .* done/) {
+			if ($line =~ /0$/) {
+				$SYS{$CURSYS}->{STATUS}	= "ok";
+			} else {
+				$SYS{$CURSYS}->{STATUS}	= "ERROR!";
+			}
+			$SYS{$CURSYS}->{TEND}	= $CURTIME;
+			$CURSYS = $SAVESYS;
+			$SAVESYS = "";
+			last CASE;
+		}
+	}
+}
+
+
+sub fmtsize {
+	my ($bytes,$dec)	= @_;
+	$dec			= 3	if (!defined $dec);
+
+	return ""	if (!defined $bytes);
+
+	my $k	= $bytes / 1024;
+	my $m	= $k / 1024;
+	my $g	= $m / 1024;
+
+	return sprintf( "%.${dec}fG", $g )		if ( int($g) );
+	return sprintf( "%.${dec}fM", $m )		if ( int($m) );
+	return sprintf( "%.${dec}fK", $k )		if ( int($k) );
+	#return sprintf( "%db", $bytes );
+	return sprintf( "%.${dec}fK", $bytes / 1024.0 );
+	#return "1.0K";	# fake bytes count
+}
+
+sub fmttime
+{
+	my ($tm)	= @_;
+	return ""	if (!defined $tm || $tm eq "");
+	my $out	=
+		substr( $tm, 0, 2 ) . ":" .
+		substr( $tm, 2, 2 ) . ":" .
+		substr( $tm, 4, 2 );
+	return $out;
+}
+
+sub timediff
+{
+	my ($tm1, $tm2)	= @_;
+
+	return ""	if (!defined $tm2 || $tm2 eq "");
+
+	my $h1	= substr( $tm1, 0, 2 ) * 3600;
+	my $h2	= substr( $tm2, 0, 2 ) * 3600;
+
+	if ($h1 > $h2) {
+		$h2 += 3600 * 24;	# day after
+	}
+
+	my $sec1 = $h1 +
+		substr( $tm1, 2, 2 ) * 60 +
+		substr( $tm1, 4, 2 );
+	my $sec2 = $h2 +
+		substr( $tm2, 2, 2 ) * 60 +
+		substr( $tm2, 4, 2 );
+	my $dif	= $sec2 - $sec1 + 1;
+	my $dh	= int( $dif / 3600 );
+	my $dm	= int( ($dif - $dh * 3600) / 60 );
+	my $ds	= $dif - ($dh * 3600) - ($dm * 60);
+
+	return sprintf( "%2d:%02d:%02d", $dh, $dm, $ds )	if ($dh);
+	return sprintf( "%2d:%02d", $dm, $ds )			if ($dm);
+	return $ds;
+}
+
+
+sub pdebug
+{
+	if ($Debug) {
+		printf( STDERR "#D " );
+		printf( STDERR @_ );
+	}
+	1;
+}
+
+
+sub normalize_fsname
+{
+	my ($fsname) = @_;
+	$fsname	=~ s/\/+$//	if ($fsname ne "/");
+	return $fsname;
+}
+
+sub diffsize
+{
+	my ($s1,$s2) = @_;
+	return size2bytes($s1) - size2bytes($s2);
+}
+
+sub size2bytes
+{
+	my ($size) = @_;
+	if ($size =~ /T/)	{ $size =~ s/T//; $size *= 1024 * 1024 * 1024 * 1024; }
+	if ($size =~ /G/)	{ $size =~ s/G//; $size *= 1024 * 1024 * 1024; }
+	if ($size =~ /M/)	{ $size =~ s/M//; $size *= 1024 * 1024; }
+	if ($size =~ /K/)	{ $size =~ s/K//; $size *= 1024; }
+	return $size;
+}
+
+sub load_langfile
+{
+	my ($cmdname)	= @_;
+	my ($lang, $filebase);
+
+	$lang	= $ENV{LANG}		if (defined $ENV{LANG} && $ENV{LANG} ne '');
+	$lang	= $ENV{KUBACKUP_LANG}	if (defined $ENV{KUBACKUP_LANG} && $ENV{KUBACKUP_LANG} ne '');
+
+	if (!defined $lang) {
+		$lang	= "C";
+		pdebug( "LANG or KUBACKUP_LANG undefined or empty\n" );
+	}
+	pdebug( "using lang='%s'\n", $lang );
+
+	$filebase	= $LIBDIR . "/" . $cmdname . "/lang-";
+	$LANGFILE	= $filebase . $lang;
+
+	pdebug( "LANGFILE='%s'\n", $LANGFILE );
+
+	if (! -f $LANGFILE) {
+		$lang =~ s/_.*//;
+   		$LANGFILE	= $filebase . $lang;
+		pdebug( "file not found, trying LANGFILE='%s'\n", $LANGFILE );
+	}
+
+	open( LANGFILE, "<$LANGFILE" ) or die "$CMD: can't open $LANGFILE: $!\n";
+	while( <LANGFILE> ) {
+		chomp();
+		next	if ($_ =~ /^#/);
+		next	if ($_ eq "");
+
+		my $key	= $_;	$key =~ s/\t+.*//;
+		my $val	= $_;	$val =~ s/[^\t]*\t+//;
+
+		$val	=~ s/\\n/\n/g;
+		$val	=~ s/\\t/\t/g;
+
+		printf( STDERR "$CMD warn on loading '$LANGFILE', duplicate msg id '%s'\n", $key ) if (defined $PO_{$key});
+		$PO_{$key} = $val;
+	}
+	close( LANGFILE ) or die;
+	return 1;
+}
+
+
+
+sub _T
+{
+	my ($msgid) = @_;
+	if (!defined $PO_{$msgid}) {
+		printf( STDERR "$CMD warn, PO_(), undefined msg id '%s'\n", $msgid );
+		return "(undef)";
+	}
+	return $PO_{$msgid};
+}
+
+sub printf_T
+{
+	my $msgid = shift( @_ );
+	printf( _T($msgid), @_ );
+}
+
+sub usage
+{
+	die( "
+== $CMDSTR = parse kubackup-run logfile and produce a report ==
+
+usage: $CMD [options] <logfile
+
+options:
+  -D	debug mode
+\n" );
+}

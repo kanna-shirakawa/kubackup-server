@@ -1,0 +1,112 @@
+==============================================================================
+ KUBACKUP - HOW TO USE CRYPTED USB EXTERNAL DISKS
+==============================================================================
+
+Using LUKS
+----------
+
+1. define a password for your disks, and save it somewhere; you can use a
+   different password for each disk, or the same for each set
+   We want to have disks automatically mounted and de-crypted when connected
+   to the backup server, so we don't need the password for this; you can
+   consider the password you define here as a "safeguard" measure, a way
+   to manually access the disk content, if needed
+
+2. partition the disk and create a LUKS space on in, using the password(s)
+   defined above, eg:
+
+   # cryptsetup luksFormat /dev/sdb1
+
+3. copy the UUID of the crypted partition:
+
+   # cryptsetup luksUUID /dev/sdb1
+
+   or
+
+   # blkid /dev/sdb1
+
+
+
+4. OPTION 1: THE FAST WAY
+
+   add an entry in /etc/crypttab using the above defined password, eg:
+
+   	backup1 UUID="aacb51da-....." MyPassword
+
+
+
+5. OPTION 2: USE A DEDICATED FILE FOR STORING THE PASSWORD (BETTER)
+
+   	backup1 UUID="aacb51da-....." /etc/kubackup/cryptkeys/backup1.password
+
+   make sure that both /etc/crypttab and password files are readable only
+   by root
+
+
+
+5. OPTION 3: USE A DEDICATED KEY, NOT HUMAN READABLE (BEST)
+
+5.1. create a keyfile with a random content
+
+   # keyfile=etc/kubackup/cryptkeys/backup1.key
+   # dd if=/dev/urandom of=$keyfile bs=1 count=4096
+
+5.2. add the key to the crypted partition
+
+   # cryptsetup luksAddKey /dev/sdb1 $keyfile
+
+   when prompted, enter the password you used to create the partition
+   to proceed
+
+5.3. add an entry to /etc/crypttab pointing to the keyfile:
+
+   	backup1 UUID="aacb51da-....." /etc/kubackup/cryptkeys/backup1.key
+
+
+OTHER HOW TO ...
+
+FORMAT THE CRYPTED PARTITION
+----------------------------
+
+ # cryptsetup luksOpen /dev/sdb1 backup1
+ # mkfs.ext4 -L "MYLABEL" /dev/mapper/backup1
+ # cryptsetup luksClose backup1
+
+
+FORMAT, SETUP AND KEEP MOUNTED, READY FOR BACKUP
+------------------------------------------------
+
+assume that you already added an entry in /etc/fstab for the disk like
+
+/dev/mapper/backup1  /mnt/backup  auto defaults,user,ro,noauto,noatime,commit=20,data=writeback 0 0
+
+note on options: big commit time (20 secs), writeback data cache to
+speed up writes
+
+the disk is mounted readonly by default, will be remounted rw by kbackup-run
+program during the backups, and then remounted ro; the idea is that the user
+can detach the external disk when not in use, even if it's mounted, so the
+backup process itself will be completely automated, and suitable for a
+brainless user
+
+
+now, using the crypto-opened mapped devices as identifier, and mounted,
+like the preceeding example, in /mnt/backup:
+
+ # cryptsetup luksOpen /dev/sdb1 backup1
+ # mkfs.ext4 -L "MYLABEL" -E lazy_itable_init=0 /dev/mapper/backup1
+ # mount -orw /dev/mapper/backup1
+ # touch /mnt/backup/LABEL_MYBACKUP01
+ # mount -oremount,ro /dev/mapper/backup1
+
+note on mkfs options: disabling the extended option lazy_itable_init will
+cause the inode table to be fully initialized during format, this can be a time
+consuming process (eg: about 20 minutes for an USB3 2Tb disk)
+
+omitting this option the inode table will be silently initialized in background 
+after the first mount, but since the process will be done at very low priority
+can take days to finish; usually is not a problem with a fixed disk permanently
+connected to a system board, but can cause problems with an external disk that
+you can remove anytime WITHOUT manually UNMOUNTING, first
+
+==============================================================================

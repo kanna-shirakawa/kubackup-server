@@ -1,0 +1,378 @@
+#!/bin/bash
+#
+# __copy1__
+# __copy2__
+#
+CMD=$(basename $0)
+CMDVER="1.3"
+CMDSIG="$CMD v$CMDVER (2022-08-12)"
+
+VERBOSE=true
+
+. /lib/ku-base/echo.sh
+
+set -e
+set -u
+
+usage()
+{
+	echo "
+# $CMDSIG - maintenance util for kubackup disks
+
+usage: [options] $CMD
+
+options:
+  -c|--config FILE	use 'FILE' instead of $CfgFile (or /etc/kubackup-run-FILE.conf)
+  --dir dir		uses 'dir' instead of standard backup mountdir
+  			(now: $BCKDIR)
+  -q|--quiet		be quiet (logs to syslog)
+
+tasks switches:
+  -t|--slots		check slots
+  -s|--sizes		check sizes (may take long time)
+  -r|--rotations	check rotations
+  -a|--all		does all above
+" >&2
+	exit 1
+}
+
+cleanup()
+{
+	rm -f $tmpfile
+}
+
+
+
+check_rotations()
+{
+	local sys=
+	local dirs=
+	local ndirs=
+	local rotations=
+	local extra=
+	local fmtsys=
+	
+	echo ""
+	echo "=[rotations]=-------------------------------------------------------------"
+	echo ""
+
+	#for sys in $( (cd $CONFDIR; ls *_rotations 2>/dev/null | sed -e 's/_rotations//') )
+	for sys in $Systems
+	do
+		rotations=$(kubackup-getconf $CfgParm $sys rotations)
+		[ $rotations = 0 ] && continue
+
+		ndirs=0
+
+		dir=$(kubackup-getconf $CfgParm $sys slot)
+		#if [ -f $CONFDIR/${sys}_slot ]
+		#then
+			#dir=$(cat $CONFDIR/${sys}_slot)
+		#else
+			#dir=$sys
+		#fi
+
+		dirs=$( (cd $BCKDIR; ls -dr ${dir}_* 2>/dev/null || : ) )
+		[ "$dirs" != "" ] && ndirs=$( echo "$dirs" | wc -l )
+
+		[ $ndirs = 0 ] && {
+			continue
+		}
+
+		printf '%-32s %2d of %2d slots\n' $sys $ndirs $rotations
+
+		fmtsys=$(printf '%-32s' $sys)
+
+		#[ -f $CONFDIR/${sys}_disabled ] && {
+		kubackup-getconf $CfgParm -b $sys disabled && {
+			echo "$fmtsys skip (system disabled)"
+			continue
+		}
+
+		[ $ndirs -le $rotations ] && continue
+		extra=$( echo "$dirs" | sed -e "1,${rotations}d" )
+		echo "$fmtsys extra dirs: " $extra
+	done
+	return 0
+}
+
+find_slots()
+{
+	local sys=
+	local dir=
+	local directories=
+	
+	:> $tmpfile
+
+	for dir in $( (cd $BCKDIR ; ls) )
+	do
+		[ $dir = "lost+found" ] && continue
+		[ $dir = "__kubackup" ] && continue
+
+		if [ -f $BCKDIR/$dir/.holder ]
+		then
+			directories=$(cd $BCKDIR; ls -d $dir/* 2>/dev/null) || :
+		else
+			directories=$dir
+		fi
+		for sys in $directories
+		do
+			[ -d $BCKDIR/$sys ] || continue
+			[ -L $BCKDIR/$sys ] && continue
+			echo $sys | sed -e 's/_[0-9][0-9][0-9][0-9]\.[0-9][0-9].*//' >> $tmpfile
+		done
+	done
+
+	Slots=$(cat $tmpfile)
+	UniqueSlots=$(sort -u $tmpfile)
+
+	return 0
+}
+
+
+check_slots()
+{
+	local slot=
+	local sys=
+	local stat=
+	local extra=
+	local missing=
+
+	echo ""
+	echo "=[slots]=-----------------------------------------------------------------"
+	echo ""
+	echo ">> UniqueSlots=$UniqueSlots"
+	for slot in $UniqueSlots
+	do
+		#sys=$(grep "^$slot$" $CONFDIR/*_slot 2>/dev/null) || :
+		for sys in $Systems __NONE__
+		do
+			[ "$sys" = "__NONE__" ] && break
+			[ "$(kubackup-getconf $CfgParm $sys slot)" = "$slot" ] && break
+		done
+
+		if [ "$sys" != "__NONE__" ]
+		then
+			#sys=$(basename $(echo $sys | sed -e 's/_slot:.*//') )
+
+			#if [ -f $CONFDIR/${sys}_disabled ]
+			if kubackup-getconf $CfgParm -b $sys disabled
+			then
+				stat="disabled"
+			else
+				stat="active"
+			fi
+			printf '%-32s %-10s %s\n' $sys $stat $slot
+		else
+			extra="$extra\n$slot"
+		fi
+	done
+
+	[ "$extra" != "" ] && {
+		echo -e "\nEXTRA DIRS:\n$extra"
+	}
+
+	for sys in $Systems
+	do
+		#slot=$BCKDIR/$sys
+		#[ -f $CONFDIR/${sys}_slot ] && slot=$(cat $CONFDIR/${sys}_slot)
+		slot=$(kubackup-getconf $CfgParm $sys slot)
+		[ -d $BCKDIR/$slot ] || {
+			missing="$missing\n$sys"
+		}
+	done
+
+	[ "$missing" != "" ] && {
+		echo -e "\nMISSING SYSTEMS:\n$missing"
+	}
+
+	return 0
+}
+
+
+
+
+check_sizes()
+{
+	local sys=
+	local dir=
+	local slot=
+	
+	echo ""
+	echo "=[sizes]=-----------------------------------------------------------------"
+	echo ""
+	printf '%-32.32s %8.8s %6.6s %6.6s  %s\n' SYS FILES DIRS SIZE DIRNAME
+
+	for sys in $Systems
+	do
+		slot=$(kubackup-getconf $CfgParm $sys slot)
+
+		for dir in $( (cd $BCKDIR; ls -d $slot ${slot}_* 2>/dev/nul || :) )
+		do
+			[ -L $BCKDIR/$dir ] && continue
+			echocr " checking $dir ..." >&2
+			( cd $BCKDIR; echo \
+				$(find $dir -type f | wc -l) \
+				$(find $dir -type d | wc -l) \
+				$(du -hs $dir)
+			)
+			echocr " checking $dir ..." >&2
+		done | while read nfiles ndirs size line
+		do
+			printf '%-32s %8d %6d %6s  %s\n' $sys $nfiles $ndirs $size "$line"
+		done
+	done
+}
+
+
+find_backup_device()
+{
+	local dev=
+
+	# find device
+	#
+	dev=$(grep " $BCKDIR " /proc/mounts | cut -d' ' -f1)
+	[ "$dev" = "" ] && {
+		echo "can't find device for backup dir, disk mounted on wrong dir?"
+		return 1
+	}
+	MountedDevice=$dev
+	return 0
+}
+
+
+remount_rw()
+{
+	grep "$MountedDevice " /proc/mounts | grep -q " ro," && {
+		echo "disk on $dev 'readonly', remounting 'readwrite'"
+		mount -oremount,rw $dev || {
+			echo "ERR $? remount $dev readwrite" >&2
+			return 1
+		}
+		F_disk_remounted=true
+	}
+}
+
+remount_ro()
+{
+	[ "$MountedDevice" = "" ] && return 0
+	$F_disk_remounted || return 0
+	mount -oremount,ro $MountedDevice || {
+		echo "ERR $? remount $MountedDevice readonly" >&2
+		return 1
+	}
+	F_disk_remounted=false
+}
+
+
+# (MAIN)
+
+[ $(id -u) != 0 ] && {
+	echo "you need to be root to run this command" >&2
+	exit 1
+}
+
+CfgFile=/etc/kubackup-run.conf
+CfgParm=
+F_disk_remounted=false
+MountedDevice=
+Slots=
+UniqueSlots=
+Systems=
+
+F_Slots=false
+F_Sizes=false
+F_Rotations=false
+
+export CONFDIR="/etc/kubackup"
+
+tmpfile=$(mktemp /tmp/$CMD-XXXXXXXX)
+
+trap "echo '*INTR*'; cleanup; exit 255" 1 2 3
+
+# get defaults from (standard) config file
+#
+[ -f $CfgFile ] && {
+	. $CfgFile || exit $?
+}
+REMOTECONF="$LABEL"
+
+while [ $# != 0 ]
+do
+  case $1 in
+    -c|--config)	[ $# -lt 2 ] && usage
+			CfgFile=$2
+			[ -f $CfgFile ] || {
+				CfgFile=/etc/kubackup-run-$2.conf
+			}
+			[ -f $CfgFile ] || {
+				echo "$CMD error: can't find config file '$2' or /etc/kubackup-run-$2.conf" >&2
+				exit 1
+			}
+			. $CfgFile || exit $?
+			CfgParm="-c $2"
+			shift
+			;;
+    -q|--quiet)		VERBOSE=false ;;
+
+    -s|--sizes)		F_Sizes=true ;;
+    -r|--rotations)	F_Rotations=true ;;
+    -t|--slots)		F_Slots=true ;;
+    -a|--all)		F_Slots=true; F_Sizes=true; F_Rotations=true ;;
+
+    -d|--dir)		shift
+			[ $# = 0 ] && usage
+			BCKDIR=$1
+			;;
+    ""|-*)		usage ;;
+    *)			break ;;
+  esac
+  shift
+done
+
+Systems=$(kubackup-systems $CfgParm "$@")
+
+label=$(cd $BCKDIR ; ls LABEL_* 2>/dev/null) || :
+[ "$label" = "" ] && {
+	echo "label not found in $BCKDIR, wrong disk or not mounted?"
+	cleanup
+	exit 1
+}
+label=$(echo "$label" | sed -e 's/^LABEL_//')
+
+find_backup_device
+
+set $(df -h $BCKDIR | tail -1)
+
+echo "
+==============================================================================
+ KUBACKUP DISK ANALISYS - DISK: $label
+==============================================================================
+
+Config:     $CfgFile
+CONFDIR:    $CONFDIR
+BCKDIR:     $BCKDIR (on $MountedDevice)
+
+total size: $2
+used space: $3
+free space: $4 ($5)
+"
+
+find_slots
+
+fmt="%3d %s\n"
+
+printf "$fmt" $(echo "$Slots" | wc -l) "slot directories (on disk)"
+printf "$fmt" $(echo "$UniqueSlots" | wc -l) "unique systems (from disk)"
+printf "$fmt" $(echo "$Systems" | wc -l) "active systems (from configs/cmdline)"
+
+$F_Slots	&& check_slots
+$F_Rotations	&& check_rotations
+$F_Sizes	&& check_sizes
+
+echo "
+==============================================================================
+"
+
+cleanup
+exit 0

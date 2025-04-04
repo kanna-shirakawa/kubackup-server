@@ -1,0 +1,124 @@
+#!/usr/bin/perl -w
+#
+# __copy1__
+# __copy2__
+#
+use strict;
+
+my $CMD		= "kubackup-tr";
+my $CMDVER	= "1.1";
+my $CMDSTR	= "$CMD v$CMDVER (2020/05)";
+
+my $LIBDIR	= "__LIB__/lang";
+   $LIBDIR	= "../lang"	if (! -d $LIBDIR);	# DEBUG
+
+my $LANGFILE;
+
+my %PO_;
+
+my $Debug	= 0;
+
+if (defined $ARGV[0] && $ARGV[0] eq "-D") {
+	$Debug	= 1;
+	shift( @ARGV );
+}
+
+usage()		if (scalar @ARGV < 2);
+
+my $cmdname	= shift( @ARGV );
+my $msgid	= shift( @ARGV );
+
+
+load_langfile( $cmdname );
+
+if ($msgid eq "--dump") {
+	printf( "# %s dump\n", $CMDSTR );
+	printf( "# file: %s\n", $LANGFILE );
+	printf( "#\n" );
+
+	foreach $_ (sort keys %PO_) {
+		$PO_{$_}	=~ s/\n/\\n/gm;
+		$PO_{$_}	=~ s/\t/\\t/gm;
+		printf( "%s	%s\n", $_, $PO_{$_} );
+	}
+	exit( 0 );
+}
+
+if (!defined $PO_{$msgid} ) {
+	printf( STDERR "%s error, undefined message id '%s'\n", $CMD, $msgid );
+	exit( 1 );
+}
+
+printf( $PO_{$msgid}, @ARGV );
+exit( 0 );
+
+
+
+sub usage
+{
+	die "
+=== $CMDSTR == outputs text string based on \$LANG env ===
+
+usage:	$CMD cmdname msg_id [printf args ...]
+
+	$CMD cmdname --dump	(to dump all lang file content)
+
+options:
+ -D	activate debug
+\n";
+}
+
+
+sub pdebug
+{
+	if ($Debug) {
+		printf( STDERR "#D " );
+		printf( STDERR @_ );
+	}
+	1;
+}
+
+
+sub load_langfile
+{
+	my ($cmdname)	= @_;
+	my ($lang, $filebase);
+
+	$lang	= $ENV{LANG}		if (defined $ENV{LANG} && $ENV{LANG} ne '');
+	$lang	= $ENV{KUBACKUP_LANG}	if (defined $ENV{KUBACKUP_LANG} && $ENV{KUBACKUP_LANG} ne '');
+
+	if (!defined $lang) {
+		$lang	= "C";
+		pdebug( "LANG or KUBACKUP_LANG undefined or empty\n" );
+	}
+	pdebug( "using lang='%s'\n", $lang );
+
+	$filebase	= $LIBDIR . "/" . $cmdname . "/lang-";
+	$LANGFILE	= $filebase . $lang;
+
+	pdebug( "LANGFILE='%s'\n", $LANGFILE );
+
+	if (! -f $LANGFILE) {
+		$lang =~ s/_.*//;
+   		$LANGFILE	= $filebase . $lang;
+		pdebug( "file not found, trying LANGFILE='%s'\n", $LANGFILE );
+	}
+
+	open( LANGFILE, "<$LANGFILE" ) or die "$CMD: can't open $LANGFILE: $!\n";
+	while( <LANGFILE> ) {
+		chomp();
+		next	if ($_ =~ /^#/);
+		next	if ($_ eq "");
+
+		my $key	= $_;	$key =~ s/\t+.*//;
+		my $val	= $_;	$val =~ s/[^\t]*\t+//;
+
+		$val	=~ s/\\n/\n/g;
+		$val	=~ s/\\t/\t/g;
+
+		printf( STDERR "$CMD warn on loading '$LANGFILE', duplicate msg id '%s'\n", $key ) if (defined $PO_{$key});
+		$PO_{$key} = $val;
+	}
+	close( LANGFILE ) or die;
+	return 1;
+}

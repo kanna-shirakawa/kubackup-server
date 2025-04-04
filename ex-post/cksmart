@@ -1,0 +1,160 @@
+#!/bin/bash
+#
+# __copy1__
+# __copy2__
+#
+# kubackup pre/post task - backup disks smart status check
+#
+CMD=$(basename "$0")
+CMDVER="1.0"
+CMDSTR="$CMD v$CMDVER (2020/03)"
+
+set -e -u
+
+mylog()
+{
+	ku_log "    [$CMD] $*"
+}
+
+print_smart_status()
+{
+	SmartOut=$(ku-smartstatus $dev 2>/dev/null || :)
+	LastCk=$(echo "$SmartOut" | tail -1 | sed -e 's/.* //')
+
+	mylog "disk smart status:"
+	echo "$SmartOut" | while read line
+	do
+		mylog "$line"
+	done
+	return 0
+}
+check_last_smartcheck_hours()
+{
+	local lastck_statefile="$statedir/$CMD.lastck"
+	local lastck=0
+	local hdiff=
+	local must_check=false
+
+	if [ -s "$lastck_statefile" ]
+	then
+		lastck=$(cat "$lastck_statefile")
+		hdiff=$(expr $LastCk - $lastck)
+		mylog "hours from last check: $hdiff"
+	
+ 		[ $hdiff -lt $CheckInterval ] && {
+			mylog "check time limit ($CheckInterval) reached"
+			must_check=true
+		}
+	else
+		mylog "smart check never ran"
+		must_check=true
+	fi
+
+	$must_check && {
+		mylog "running smart short offline test now ..."
+		if echo "$SmartOut" | grep -q "usb"
+		then
+			smartctl -d sat -t short $dev
+		else
+			smartctl -t short $dev
+		fi
+		sleep 180
+		print_smart_status
+	}
+	return 0
+}
+
+
+
+# (MAIN)
+
+# set defaults for standalone runs (ie: for debug/testing)
+#
+# on standalone invokation, arguments are used as system list
+# (formerly, as kubackup-systems arguments, see kubackup-systems
+# usage for details); first argument is used as config file if 
+# a full path is detected
+#
+#	./scriptname [/tmp/myconfig.conf] [system-list ...]
+#
+# F_EXEC is set to "false", if you want to run in exec mode
+# use the syntax
+#
+#	F_EXEC=true ./scriptname ...
+#
+f_standalone=false
+
+[ "X${CONFDIR:-}" == "X" ] && {
+	f_standalone=true
+	export CONFDIR="/etc/kubackup"
+	export F_EXEC=${F_EXEC:-"false"}
+	export VERBOSE="true"
+	export LOGSYSLOG="false"
+	export CfgFile="/etc/kubackup-run.conf"
+	. $CfgFile
+	case ${1:-} in
+	  /*) CfgFile=$1; shift ;;
+	esac
+	. $CfgFile
+	export SYSTEMS=$(echo $(kubackup-systems --config $CfgFile $@))
+}
+
+. /lib/ku-base/log.sh
+
+# set defaults for standalone runs (ie: for debug/testing)
+#
+[ "X${CONFDIR:-}" == "X" ] && {
+	CONFDIR="/etc/kubackup"
+	F_EXEC=${F_EXEC:-"false"}
+	VERBOSE=${VERBOSE:-"true"}
+	. /etc/kubackup-run.conf
+}
+cfgfile="$CONFDIR/clean_disk.cfg"
+
+[ -s "$cfgfile" ] || exit 0
+
+
+
+
+. /lib/ku-base/log.sh
+
+# optional parameters, overrides from files in kubackup
+# statedir (per disk options)
+#
+statedir="$BCKDIR/__kubackup"
+
+# smart check must be repeated after N hours from last one
+# file: $CMD.check_interval
+#
+CheckInterval=100	# hours
+
+# optional smartclt command parameters, ie -d sat for some
+# usb disk enclosures
+# file: $CMD.smartctl_parms
+#
+SmartctlParms=
+
+
+
+
+
+[ "X$BackupDev" = "X" ] && {
+	mylog "backup is not on standalone disk (BackupDev not set), checks ignored"
+	exit 0
+}
+dev=$(echo $BackupDev | sed -e 's/[0-9][0-9]*$//')
+
+
+SmartOut=
+LastCk=
+
+print_smart_status
+
+if echo "$LastCk" | grep -q '^[0-9][0-9]*$'
+then
+	check_last_smartcheck_hours
+else
+   	mylog "warning: non-numeric last check '$LastCk' ignored"
+fi
+
+exit 0

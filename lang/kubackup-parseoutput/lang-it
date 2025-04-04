@@ -1,0 +1,23 @@
+head-disk-space	DISCO: %s - %s SPAZIO TOTALE\n
+head-bck-start	 inizio backup: %6s liberi  %6s usati (%s)\n
+head-bck-end	 fine backup:   %6s liberi  %6s usati (%s)     %s%s diff\n
+
+sys-title	\nSYSTEMI\n\n
+sys-system	sistema
+sys-start	inizio
+sys-end		fine
+sys-time	durata
+sys-status	stato
+sys-totals	tempo totale
+
+fs-title	\nFILESYSTEM\n
+fs-sys		sistema
+fs-name		filesystem
+fs-orig		originale
+fs-start	/ inizio
+fs-copied	copiato
+fs-end		/ fine
+fs-status	stato
+fs-time		/ durata
+fs-totals	totali
+fs-speed	speed

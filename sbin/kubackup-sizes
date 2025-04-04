@@ -1,0 +1,187 @@
+#!/usr/bin/perl -w
+#
+use strict;
+
+my $CMD		= "kubackup-sizes";
+my $CMDVER	= "1.1";
+my $CMDSTR	= "$CMD v$CMDVER (2022-08-12)";
+
+my $Debug	= 0;
+
+my $fname;
+my $fsize;
+my $levels = 1;
+my $mincnt = 0;
+
+my $sortkey = 'size';	# size
+
+my %TSIZE;
+my %TCNT;
+
+while (@ARGV) {
+  ARGS: {
+    $_	= shift(@ARGV);
+    if ($_ eq "-l") {
+  	usage()	if (!@ARGV);
+	$levels	= shift(@ARGV);
+	last ARGS;
+    }
+    if ($_ eq "-m") {
+  	usage()	if (!@ARGV);
+	$mincnt	= shift(@ARGV);
+	if ($mincnt =~ /k$/i)	{ $mincnt =~ s/k$//i; $mincnt *= 1024; }
+	if ($mincnt =~ /m$/i)	{ $mincnt =~ s/m$//i; $mincnt *= 1048576; }
+	if ($mincnt =~ /g$/i)	{ $mincnt =~ s/g$//i; $mincnt *= 1073741824; }
+	last ARGS;
+    }
+    if ($_ eq "-s") { $sortkey = 'size'; last ARGS; }
+    if ($_ eq "-c") { $sortkey = 'count'; last ARGS; }
+    if ($_ eq "-d") { $sortkey = 'name'; last ARGS; }
+
+    usage();
+  }
+}
+
+# we are interested in those lines, regarding files:
+#
+# >f..t...... prj/work/file.example
+# ^M           0   0%    0.00kB/s    0:00:00  ^M      35373 100%   68.54kB/s    0:00:00 (xfer#18205, to-check=2511/1184736)
+#
+# 2022-08-12 lc
+# - fix: recent version of rsync changed the output (xfr instead of xfer, chk instead of check in ir-chk and to-chk)
+#
+# ^M           0   0%    0.00kB/s    0:00:00  ^M      35373 100%   68.54kB/s    0:00:00 (xfr#18205, ir-chk=2511/1184736)
+#
+my $cr = chr(13);
+
+while (<>) {
+	chomp();
+
+	# rsync with --progress option uses '^M' to reset terminal cursor to begin-of-line
+	# when showing progress and, at end, the file size
+	#
+	# the result is a very long line that is, really, the sum of multiple lines
+	# we split it using [return] char, and keep only the last one
+	#
+	if ($_ =~ /$cr/) {
+		my @lines	= split( /$cr/ );
+		$_		= pop( @lines );
+	}
+	process_line( $_ );
+}
+
+my %sort;
+my $dir;
+my $key;
+
+if ($sortkey eq 'name') {
+	foreach $dir (keys %TCNT) {
+		$sort{$dir}	= $dir;
+	}
+}
+if ($sortkey eq 'size') {
+	foreach $dir (keys %TCNT) {
+		next	if ($mincnt != 0 && $TSIZE{$dir} < $mincnt);
+		$key = sprintf( "%012d", 999999999999 - $TSIZE{$dir} );
+		$sort{$key}	= $dir;
+	}
+}
+if ($sortkey eq 'count') {
+	foreach $dir (keys %TCNT) {
+		next	if ($mincnt != 0 && $TCNT{$dir} < $mincnt);
+		$key = sprintf( "%012d", 999999999999 - $TCNT{$dir} );
+		$sort{$key}	= $dir;
+	}
+}
+
+
+
+foreach $key (sort keys %sort) {
+	$dir	= $sort{$key};
+	printf( "%8d %10s %s\n", $TCNT{$dir}, fmtsize( $TSIZE{$dir}, 0 ), $dir );
+}
+
+
+
+sub process_line
+{
+	my ($line) = @_;
+	
+	##print( "line='$line'\n" )	if ($Debug);
+
+	if ($line =~ /^.f/) {
+		$fname	= $line;
+		$fname	=~ s/^............//;
+		return 1;
+	}
+
+	# 2022-08-12 lc see comment above
+	if ($line =~ / 100% .*xfer/ || $line =~ / 100% .*xfr/) {
+		$fsize	= $line;
+		$fsize	=~ s/^ +//;
+		$fsize	=~ s/ .*//;
+		##print "$fsize $fname\n";
+
+		my @tmp	= split( "/", $fname );
+		pop( @tmp );	# removes filename
+
+		my $dir;
+		if (scalar @tmp < $levels) {
+			##print( "copy, tmp has " . scalar @tmp . " elements\n" ) if ($Debug);
+			$dir	= join( "/", @tmp );
+		} else {
+			##print( "slice, tmp has " . scalar @tmp . " elements\n" ) if ($Debug);
+			$dir	= join( "/", @tmp[ 0 .. ($levels - 1) ] );
+		}
+
+		##print "dir='$dir' fsize=$fsize fname='$fname'\n";
+
+		# 2022-08-12 lc
+		# - fix: rsync now uses commas thousands delimiters on numbers
+		#
+		$fsize =~ s/,//g;
+
+		$TSIZE{$dir} = 0	if (!defined $TSIZE{$dir});
+		$TSIZE{$dir} += $fsize;
+		$TCNT{$dir} = 0		if (!defined $TCNT{$dir});
+		$TCNT{$dir} ++;
+		return 1;
+	}
+}
+
+
+
+sub fmtsize {
+	my ($bytes,$dec)	= @_;
+	$dec			= 3	if (!defined $dec);
+
+	return ""	if (!defined $bytes);
+
+	my $k	= $bytes / 1024;
+	my $m	= $k / 1024;
+	my $g	= $m / 1024;
+
+	return sprintf( "%.${dec}fG", $g )		if ( int($g) );
+	return sprintf( "%.${dec}fM", $m )		if ( int($m) );
+	return sprintf( "%.${dec}fK", $k )		if ( int($k) );
+	#return sprintf( "%db", $bytes );
+	return sprintf( "%.${dec}fK", $bytes / 1024.0 );
+	#return "1.0K";	# fake bytes count
+}
+
+
+sub usage
+{
+	die( "
+== $CMDSTR = print stats about copied files from kubackup logfile ==
+
+usage: $CMD [options] < logfile
+
+options:
+  -l n	subdirs level (default: $levels)
+  -s	sort by total size (default)
+  -c	sort by file count
+  -d	sort by directory name
+  -m n	discard values less than 'n' (valid when sorting by size or count)
+\n" );
+}

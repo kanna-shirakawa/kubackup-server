@@ -1,0 +1,39 @@
+#!/bin/bash
+#
+# /etc/kubackup/post.d/examples/include-post-example
+#
+# __copy1__
+# __copy2__
+#
+# example POST script for kubackup-run
+#
+# this script will be included (sourced) by calling main script
+# kubackup-run, you should NOT use explicit "exit" statement here,
+# instead set $global_stat to a non-zero value on errors
+#
+# copy this template to a suitable name, and made it executable
+# (chmod +x scriptname); DON'T MODIFY this example, it will be
+# overwritten on future package updates
+#
+CMD=$(basename "$0")
+CMDVER="1.0"
+CMDSTR="$CMD v$CMDVER (2020/03)"
+
+set -e -u
+
+# get common functions and bootstrap code; will get the logging
+# library (/lib/ku-base/log.sh) too
+#
+# note that logging inherith behaviour from parent script (kubackup-run)
+# via environment exports
+#
+. /usr/lib/kubackup/pre-post-common.sh
+
+# example code
+#
+mylog "example POST script (included) ==================================="
+
+# do NOT exits, this file will be included; instead, on errors, set:
+# global_stat=1
+
+# (EOF) /etc/kubackup/post.d/examples/include-post-example

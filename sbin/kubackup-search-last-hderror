@@ -1,0 +1,70 @@
+#!/bin/bash
+#
+# __copy1__
+# __copy2__
+#
+CMD=$(basename $0)
+CMDVER="1.5"
+CMDSTR="$CMD v$CMDVER (2014/04)"
+
+usage()
+{
+	echo "usage: $CMD [pid]" >&2
+	exit 1
+}
+
+cleanup()
+{
+	rm -f $tmpfile
+}
+
+search_err()
+{
+	local out=
+	out=$(fgrep 'I/O error' $tmpfile | egrep 'sector |logical block ')
+	[ "$out" != "" ] && {
+		echo "$out"
+		return 0
+	}
+	out=$(grep 'No space left' $tmpfile)
+	[ "$out" != "" ] && {
+		echo "$out"
+		return 0
+	}
+	return 1
+}
+
+
+# (MAIN)
+
+tmpfile=$(mktemp /tmp/$CMD-XXXXXXX) || exit $?
+
+pid=$1
+
+trap "echo '*INTR!*'; cleanup; exit 255" 1 2 3
+trap "cleanup" EXIT
+
+# Oct 27 05:28:54 srvbck kernel: [6180221.518263] end_request: I/O error, dev sda, sector 591087535
+# Oct 27 05:28:54 srvbck kernel: [6180221.536076] Buffer I/O error on device sda1, logical block 73885934
+
+[ "$pid" == "" ] && {
+	for lines in 2000 4000 6000
+	do
+		tail -$lines /var/log/messages >$tmpfile
+		out=$(search_err) && {
+			echo "$out"
+			exit 0
+		}
+	done
+	exit 1
+}
+
+
+sed -n -e "/STARTED P$pid kubackup-run/,/kubackup-run-$pid ERRORS/p" /var/log/messages >$tmpfile
+
+out=$(search_err) && {
+	echo "$out"
+	exit 0
+}
+
+exit 1

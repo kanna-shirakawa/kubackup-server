@@ -1,0 +1,327 @@
+#!/bin/bash
+#
+# __copy1__
+# __copy2__
+#
+# uses 'xlocate' util to create/update the disk content file index
+# beware: that can be a time and resources intensive task
+#
+# this must run after the last backup, so it must be placed in the
+# "post.d" subdir of the config directory
+#
+# entries will be stored in a dedicated dbfile (DBFILE var), shared with
+# all the backup disks; due the --autotag option, the entries will be
+# stored using the disk label
+#
+# the script will records the last scanned dirs using a statefile in
+# the permanent statedir on backup disk:
+#
+#	$BCKDIR/__kubackup/xlocate.lastrun
+#
+# if you overrides the db filename setting XLOCATE_DBFILE to <name>:
+#
+#	$BCKDIR/__kubackup/xlocate.<name>.lastrun
+#
+# subsequent invokations will scan only new or modified dirs, relying
+# on modificazion date of logfiles deployed by kubackup-run itself;
+# this reduces the load, avoiding to scan the whole backup disk,
+# but on large backups the task will be very time consuming, and
+# RAM usage intensive
+#
+# WARNING: jobs in 'post.d' subdir will run on EVERY kubackup-run
+# invokation; if you have different runs a day you don't want to
+# update the disk index each time, better to do this, ie, once a day
+#
+# the best way to do this is:
+#
+#  - create a dedicated config dir, with no systems defined, ie
+#
+#	/etc/kubackup-once
+#
+#  - create the related config file "/etc/kubackup-run-once.conf"
+#    containing the override for the config dir:
+#
+#	CONFDIR="/etc/kubackup-once"
+#
+#  - install this script file into the post.d subdir
+#
+#  - when needed, run:  kubackup-run -c once dummy
+#
+# note: you can use any name as system argument, will be ignored
+# (skipped) because is not defined anywhere; "dummy" is just a good
+# self explaining sysname
+#
+#
+# ENV OVERRIDES
+#
+# if you want to change default parms, instead of directly modify this
+# script, use the kubackup-run config file itself to define (change)
+# this env vars -- note that they needs to be exported to take effect:
+#
+#    XLOCATE_DBFILE		dbfile name (default: none, uses disk label)
+#    XLOCATE_SCAN_ARCHIVES	true or false (default: false)
+#    XLOCATE_COMPRESS		true or false (default: false)
+#    XLOCATE_MODE		can be add or update (default: add)
+#    XLOCATE_PARMS		any xlocate additional option (default: none)
+#    XLOCATE_SLOTS		slots to search (default: all backup disk)
+#				in shell glob format, remember that, when
+#				rotations are enabled, the date will be
+#				appended to system names, so you must use,
+#				ie: "mysystem_* slot/othersys_*"
+#    XLOCATE_IGNORE		slots to be ignored by scan, an extended
+#				regular expression (default: none)
+#				ie: "^ignoresys_|^slot/othersys_"
+#
+# warning: due shell limitiations you cannot use spaces in any path declared
+# in XLOCATE_* variables
+#
+CMD=$(basename "$0")
+CMDVER="3.3"
+CMDSTR="$CMD v$CMDVER (2020/12)"
+
+set -e -u
+
+# get common functions and bootstrap code; will get the logging
+# library (/lib/ku-base/log.sh) too
+#
+# note that logging inherith behaviour from parent script (kubackup-run)
+# via environment exports
+#
+. /usr/lib/kubackup/pre-post-common.sh
+
+
+mylog()
+{
+        ku_log "    [$CMD]" $*
+}
+
+cleanup()
+{
+	rm -f ${statefile}.*.tmp $statefile.new $statefile.full
+}
+
+
+# (MAIN)
+
+XLOCATE_DBFILE="${XLOCATE_DBFILE:-}"
+XLOCATE_SCAN_ARCHIVES=${XLOCATE_SCAN_ARCHIVES:-false}
+XLOCATE_COMPRESS=${XLOCATE_COMPRESS:-false}
+XLOCATE_PARMS=${XLOCATE_PARMS:-}
+XLOCATE_SLOTS=${XLOCATE_SLOTS:-*}
+XLOCATE_IGNORE=${XLOCATE_IGNORE:-}
+XLOCATE_MODE=${XLOCATE_MODE:-add}
+
+mylog "  XLOCATE_DBFILE='$XLOCATE_DBFILE'"
+mylog "  XLOCATE_SCAN_ARCHIVES='$XLOCATE_SCAN_ARCHIVES'"
+mylog "  XLOCATE_COMPRESS='$XLOCATE_COMPRESS'"
+mylog "  XLOCATE_MODE='$XLOCATE_MODE'"
+mylog "  XLOCATE_PARMS='$XLOCATE_PARMS'"
+mylog "  XLOCATE_SLOTS='$XLOCATE_SLOTS'"
+mylog "  XLOCATE_IGNORE='$XLOCATE_IGNORE'"
+
+if [ "X$XLOCATE_SCAN_ARCHIVES" = "Xtrue" ]
+then
+	scan_arks="--tar --zip --7z"
+else
+	scan_arks="--no-tar --no-zip --no-7z"
+fi
+
+if [ "X$XLOCATE_DBFILE" != "X" ]
+then
+	dbfile="$XLOCATE_DBFILE"
+else
+	dbfile=
+fi
+
+if [ "X$XLOCATE_COMPRESS" = "Xfalse" ]
+then
+	compress="--no-compress"
+else
+	compress="--compress"
+fi
+
+case $XLOCATE_MODE in
+  add|update)	;; # ok
+  *)	mylog "ERROR: \$XLOCATE_MODE must be 'add' or 'update'"
+  	exit 1
+	;;
+esac
+
+parms="
+	--no-record-dirs
+	--rmleaf
+	--autotag
+"
+
+if [ "X$dbfile" != "X" ]
+then
+	mylog "will use dbfile from config: $XLOCATE_DBFILE"
+else
+	[ "X$BCKDIR" = "X" ] && {
+		mylog "ERROR: \$BCKDIR not defined, cannot get partition label to set dbfile"
+		mylog "   you must defined BCKDIR or explicitly XLOCATE_DBFILE name"
+		exit 1
+	}
+	partition=$(fgrep " $BCKDIR " /proc/mounts | awk '{print $1}' )
+	mylog "disk mounted on partition: $partition"
+
+	label=$(blkid $partition | sed -e 's/.*LABEL="//' -e 's/".*//')
+	[ "X$label" = "X" ] && {
+		mylog "ERROR: cannot get partition label to set dbfile"
+		mylog "  you must manually define XLOCATE_DBFILE in your /etc/kubackup-run-*.conf config file"
+		exit 1
+	}
+	mylog "disk label: $label"
+	dbfile=$label
+	mylog "will use standard dbfile: $label"
+fi
+
+
+
+# searches backup dirs modified since last run
+#
+# we rely on logfiles saved by kubackup-run script, those newer than a state file
+# saved by this script on each run, containing the list of last scanned dirs;
+# the logfiles has the same dir names, plus "-kubackup.log" (or .err) added
+#
+# comparing the content of this file with the actual backup dirs we can detect
+# both new (or modified) dirs, and delete ones
+#
+# if the file is not present, all backup dirs will be scanned
+#
+# each backup disk (identified by $label) have its own separate statefile
+#
+statedir="$BCKDIR/__kubackup"
+statefile="$statedir/$CMD.$dbfile.lastrun"
+[ -d "$statedir" ] || mkdir "$statedir"
+
+
+trap 'echo -e "\n$0 *INTR*\n" >&2; exit 255' 1 2 3
+trap 'echo -e "\n$0: unexpected error $? at $LINENO\n" >&2' ERR
+trap 'cleanup' EXIT
+
+
+here=$(pwd)
+
+cd $BCKDIR
+mylog "searching logfiles, slots=$XLOCATE_SLOTS ..."
+(
+	find -P $XLOCATE_SLOTS -maxdepth 2 -name "*-kubackup.log"
+	find -P $XLOCATE_SLOTS -maxdepth 2 -name "*-kubackup.err"
+) | sed -e 's/-kubackup\.log//' -e 's/-kubackup\.err//' | sort -u >"$statefile.full.tmp"
+
+[ "X$XLOCATE_IGNORE" != "X" ] && {
+	mylog "ignoring slots $XLOCATE_IGNORE ..."
+	egrep -q "$XLOCATE_IGNORE" "$statefile.full.tmp" && {
+		egrep -v "$XLOCATE_IGNORE" "$statefile.full.tmp" >"$statefile.full.ignored.tmp" || :
+		mv "$statefile.full.ignored.tmp" "$statefile.full.tmp"
+	}
+}
+mv "$statefile.full.tmp" "$statefile.full"
+
+if [ -f "$statefile"  ]
+then
+	mylog "searching changes since last run"
+	(
+	  find -P $XLOCATE_SLOTS -maxdepth 2 -name "*-kubackup.log" -newer "$statefile"
+	  find -P $XLOCATE_SLOTS -maxdepth 2 -name "*-kubackup.err" -newer "$statefile"
+	) | sed -e 's/-kubackup\.log//' -e 's/-kubackup\.err//' | sort -u >"$statefile.new.tmp"
+else
+	mylog "no last run, will scan all backup dirs"
+	cp "$statefile.full" "$statefile.new.tmp"
+fi
+
+[ "X$XLOCATE_IGNORE" != "X" ] && {
+	egrep -q "$XLOCATE_IGNORE" "$statefile.new.tmp" && {
+		egrep -v "$XLOCATE_IGNORE" "$statefile.new.tmp" >"$statefile.new.ignored.tmp" || :
+		mv "$statefile.new.ignored.tmp" "$statefile.new.tmp"
+	}
+}
+mv "$statefile.new.tmp" "$statefile.new"
+
+cd "$here"
+
+
+declare -a newdirs
+newdirs=()
+prune_re=
+save_ifs="$IFS"
+
+IFS=$'\n'
+
+for dir in $(cat "$statefile.new" | sed -e "s|^|$BCKDIR/|")
+do
+	cnt=${#newdirs[@]}
+	newdirs[$cnt]="$dir"
+done
+cnt_new=${#newdirs[@]}
+cnt_old=0
+
+[ -s "$statefile" ] && {
+
+	cnt_old=$(diff "$statefile" "$statefile.full" | grep "^< " | wc -l)
+	sep=
+
+	# purge vanished dirs entries
+	#
+	for dir in $(diff "$statefile" "$statefile.full" | grep "^< " | sed -e 's/^..//')
+	do
+		prune_re="${prune_re}${sep}\\|$dir"
+		sep="|"
+	done
+
+	# purge new dirs also, old entries must be wiped out before adding news
+	#
+	if [ ${#newdirs[@]} != 0 ]
+	then
+		for dir in "${newdirs[@]}"
+		do
+			prune_re="${prune_re}${sep}\\|${dir#$BCKDIR/}"
+			sep="|"
+		done
+	fi
+}
+IFS="$save_ifs"
+
+
+mylog "dirs count: old=$cnt_old new=$cnt_new"
+
+
+progress=
+$VERBOSE && progress='--progress'
+
+dummy=
+dummytag=
+$F_EXEC || { dummy=":"; dummytag="(dry-run) "; }
+
+# serializes commandline
+cmdline=$(echo 'xlocate' --$XLOCATE_MODE --leaf $BCKDIR --db $dbfile $progress $compress $parms $scan_arks $XLOCATE_PARMS)
+
+[ "X$prune_re" != "X" ] && {
+	mylog "${dummytag}running xlocate --prune $compress --db $dbfile '$prune_re'"
+	echo
+	time ${dummy} nice xlocate --prune $compress --db $dbfile "$prune_re"
+	echo
+}
+if [ $cnt_new = 0 ]
+then
+	mylog "no changes from last run, scan skipped"
+else
+	mylog "${dummytag}running $cmdline" "${newdirs[@]}"
+	echo
+	time ${dummy} nice $cmdline "${newdirs[@]}"
+	echo
+fi
+
+
+# save new statefile
+#
+$F_EXEC && {
+	[ -f "$statefile.full" ] && {
+		[ -f "$statefile" ] && mv "$statefile" "$statefile.old.tmp"
+		mv "$statefile.full" "$statefile"
+	}
+}
+
+# you must exit with proper errorcode
+exit 0

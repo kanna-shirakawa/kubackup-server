@@ -1,0 +1,67 @@
+:TOOLKIT	kubackup
+:VERSION	3.0
+:RELEASE	ku25.03a
+:SIGNATURE	${VERSION}-${RELEASE} (2025-03-13)
+
+:maintainer	Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>
+:homepage	http://www.kubiclabs.com/
+:copy1		(c) $maintainer
+:copy2		for copyright see /usr/share/doc/$TOOLKIT/copyright
+
+:default_mode	775
+
+:dir		$etcdir
+:dir		$etcdir/xinetd.d
+:dir		$bindir
+:dir		$sbindir
+:dir		$docdir
+:dir		$confdir
+:dir		$libdir
+
+:dir		$confdir/pre.d
+:dir		$confdir/pre.d/examples
+:dir		$confdir/pre.d/offline
+:dir		$confdir/post.d
+:dir		$confdir/post.d/examples
+:dir		$confdir/post.d/offline
+
+:dir		$etcdir/kubackup-once
+:dir		$etcdir/kubackup-once/pre.d
+:dir		$etcdir/kubackup-once/post.d
+
+:default_mode	775
+
+bin/*		$bindir/
+sbin/*		$sbindir/
+pre/*		$confdir/pre.d/
+#post/*		$confdir/post.d/
+
+#pre-once/*	$etcdir/kubackup-once/pre.d/
+/dev/null	$etcdir/kubackup-once/pre.d/.placeholder
+post-once/*	$etcdir/kubackup-once/post.d/
+
+:default_mode	600
+etc/*		$etcdir/
+xinetd/*	$etcdir/xinetd.d/
+docs/*		$docdir/
+lib/*		$libdir/
+
+:default_mode	770
+ex-pre/*	$confdir/pre.d/examples/
+ex-post/*	$confdir/post.d/examples/
+
+:default_mode	600
+/dev/null	$confdir/pre.d/offline/.placeholder
+/dev/null	$confdir/post.d/offline/.placeholder
+
+
+# languages
+#
+:dir		$libdir/lang
+:dir		$libdir/lang/kubackup-run
+:dir		$libdir/lang/kubackup-parseoutput
+:dir		$libdir/lang/kubackup-status
+
+lang/kubackup-run/*		$libdir/lang/kubackup-run/
+lang/kubackup-parseoutput/*	$libdir/lang/kubackup-parseoutput/
+lang/kubackup-status/*		$libdir/lang/kubackup-status/

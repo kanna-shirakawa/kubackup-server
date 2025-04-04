@@ -1,0 +1,358 @@
+#!/bin/bash
+#
+# __copy1__
+# __copy2__
+#
+CMD=$(basename $0)
+CMDVER="1.2"
+CMDSTR="$CMD v$CMDVER (2020/07)"
+
+. /lib/ku-base/echo.sh
+
+set -e -u
+
+
+usage()
+{
+	echo "=== $CMDSTR == computes remote backup size ==
+
+usage: $CMD [options] { tag(s) | --all }
+
+options:
+ -r|--refresh	refresh fileinfos (remove current filelist and
+ 		download them again from remote server)
+ -a|--all	uses all tags defined in config dir '$CfgDir'
+ -l|--long	detailed report
+ -d|--disabled	show also disabled tags
+">&2
+	exit 1
+}
+
+cleanup()
+{
+	rm -f $tmpfile
+	return 0
+}
+
+
+psize()
+{
+	local kb=$(($1 / 1024))
+	local mb=$(($1 / 1048576))
+	local gb=$(echo -e "scale=2\n$1/1024/1024/1024" | bc)
+
+	if [ $gb != 0 ]
+	then
+		printf "%6.1f Gb" "$gb"
+	elif [ $mb != 0 ]
+	then
+		printf "%6.1f Mb" "$mb"
+	else
+		printf "%6.1f Kb" "$kb"
+	fi
+	return 0
+}
+
+pdate()
+{
+	# 20180708T044030Z -> 20180708 04:40:30
+	local dt=$(echo "$1" | sed -e 's/\(........\).\(..\)\(..\)\(..\)./\1 \2:\3:\4/')
+	date '+%Y.%m.%d %H:%M:%S' --date "$dt"
+}
+
+boolean()
+{
+	local varname=$1
+	local value=$2
+
+	case $value in
+	  [yY][eE][sS]|true|1)	echo true ;;
+	  [nN][oO]|false|0|"")	echo false ;;
+	  *) log_err "error: var '$varname' unknown value '$value', must be true/false, yes/no, 1/0"; return 1 ;;
+	esac
+	return 0
+}
+
+is_disabled()
+{
+	local cfgfile="$CfgDir/$1"
+	local disabled=false
+	eval $(grep "^disabled=" "$cfgfile") || :
+	disabled=$(boolean "disabled" "$disabled")
+	$disabled	# returns true or false
+}
+
+
+# (MAIN)
+
+# work dir
+#   used to store file sizes (stolen from ku-duplo script)
+#
+export WORKDIR
+
+[ -f /etc/default/kusa-paths ] && . /etc/default/kusa-paths
+
+if [ "X$KUSA_PATH_WORKDIR" != "X" ]
+then
+	WORKDIR="$KUSA_PATH_WORKDIR/ku-duplo"
+else
+	WORKDIR="$TMPDIR/ku-duplo"
+fi
+
+CfgDir="/etc/ku-duplo"
+cfg="$CfgDir/global.conf"
+tmpfile=$(mktemp /tmp/$CMD-XXXXXXXX)
+do_refresh=false
+f_long=false
+f_all=false
+f_disabled_also=false
+tags=
+
+while [ $# != 0 ]
+do
+  case $1 in
+    -r|--refresh)	do_refresh=true ;;
+    -a|--all)		f_all=true ;;
+    -l|--long)		f_long=true ;;
+    -d|--disabled)	f_disabled_also=true ;;
+    -*|"")		usage ;;
+    *)			tags="$tags $1" ;;
+  esac
+  shift
+done
+
+$f_all && {
+	tags=$( (
+		cd $CfgDir
+		grep -l "^main_dir=" * | while read cfg
+		do
+			$f_disabled_also || {
+				is_disabled "$cfg" && continue
+			}
+			echo $cfg
+		done
+	) )
+	tags=$(echo $tags)
+}
+
+[ "X$tags" = "X" ] && usage
+
+
+# sanity checks
+#
+[ -f $cfg ] || {
+	echo "error: cfg file '$cfg' not found" >&2
+	exit 1
+}
+. $cfg
+
+[ -d "$WORKDIR" ] || {
+	echo "error: workdir '$WORKDIR' doesn't exists" >&2
+	echo "       maybe that 'ku-duplo' never ran before? (wrong system?)" >&2
+	exit 1
+}
+
+
+:>$tmpfile
+
+trap 'echo -e "\n*INTR*\n"; exit 255' 1 2 3
+trap 'echo -e "\nunexpected error $? at $LINENO\n"' ERR
+trap 'cleanup' EXIT
+
+echo "host $remote_server" >$tmpfile
+echo "user $remote_user" >>$tmpfile
+echo "pass $remote_password" >>$tmpfile
+
+for tag in $tags
+do
+	[ -f $CfgDir/$tag ] || {
+		echo "error: tag '$tag' not defined in config dir '$CfgDir'" >&2
+		exit 1
+	}
+
+	filelist="$WORKDIR/${tag}-files.list"
+	$do_refresh && rm -f "$filelist"
+
+	if [ -s "$filelist" ]
+	then
+		echo -n "  using downloaded file list for: $tag ... "
+	else
+		echo -n "  getting remote file list for: $tag ... "
+		ncftpls   -f $tmpfile -F -t 30 -o useCLNT=0,useHELP_SITE=0 \
+			  -P "$remote_port" -l "ftp://$remote_server:$remote_port/$tag/" \
+			  > "$filelist" 2>&1 || {
+			if $f_disabled_also
+			then
+				echo "(no files)"
+				rm "$filelist"
+			else
+		    		echo -e "ERROR\n  $filelist renamed in (file).err\n:" >&2
+		    		mv "$filelist" "$filelist.err"
+		    		cat "$filelist.err" >&2
+			fi
+			continue
+		}
+	fi
+	echo $(wc -l <"$filelist") files
+done
+
+cleanup
+
+
+# for terse report
+#
+gsize=0
+tsize=0
+glsize=0
+fmt=" %-20s  %s   %s original, %3.0f%%\n"
+
+# for long report
+#
+#  TAG        FULL_DATE      INCR
+#             #  DATE  SIZE  #  DATE   SIZE
+#  ---------  -------------  --------------
+#
+lfmt="  %-20.20s  %-35.35s  %-35.35s\n"
+lfmt_d="%3d %-20s %10s"
+lfmt_h="%-3.3s %-20.20s %10.10s"
+line="--------------------------------------------------------"
+f_tsize=0
+i_tsize=0
+
+echo
+$f_long && {
+	f_print=$(printf "$lfmt_h" "cnt" "date" "size")
+	printf "$lfmt" "" "--- FULL $line" "--- INCREMENTAL $line"
+	printf "$lfmt" "TAG" "$f_print" "$f_print"
+	printf "$lfmt" "$line" "$line" "$line"
+	f_print=
+}
+
+for tag in $tags
+do
+	filelist="$WORKDIR/${tag}-files.list"
+	f_cnt=0
+	f_size=0
+	i_cnt=0
+	i_last_ts=
+	i_size=0
+	sortkey=
+
+	[ -f "$filelist" ] || continue
+
+	echocr " scanning $tag ... sorting ... ">&2
+	# -rw-r--r-- 1 ftp ftp       19143953 Jul 08  2018 duplicity-full.20180708T044030Z.vol4.difftar.gpg
+	# -rw-r--r-- 1 ftp ftp        1569458 Oct 27  2017 duplicity-full-signatures.20171026T235334Z.sigtar.gpg
+	# -rw-r--r-- 1 ftp ftp            200 Oct 29  2017 duplicity-inc.20171026T235334Z.to.20171029T113157Z.manifest.gpg
+	exec 9<&0 <"$filelist"
+	while read x x x x size x x x name
+	do
+		case $name in
+	  	  *-full.*)	ts=$(echo "$name" | sed -e 's/.*-full\.//' -e 's/\..*//') ;;
+	  	  *-full-si*)	ts=$(echo "$name" | sed -e 's/.*res\.//' -e 's/\..*//') ;;
+	  	  *)		ts=$(echo "$name" | sed -e 's/.*\.to\.//' -e 's/\..*//') ;;
+		esac
+
+		# moves signature and manifest file at end (note: will sort in reverse order)
+		sortkey=5
+		case $name in
+		  *manifest*|*signature*)	sortkey=0 ;;
+		esac
+		echo "$ts $sortkey $size $name"
+	done | sort -r >$tmpfile
+	cp -a $tmpfile /tmp/kk
+	exec 0<&9 9<&-
+	echocr >&2
+
+	# re-read entries in timestamp reverse order
+	#
+	exec 9<&0 <"$tmpfile"
+	while read ts x size name
+	do
+		tsize=$(($tsize + $size))
+		gsize=$(($gsize + $size))
+		echocr " scanning $tag ... size=$tsize/$gsize" >&2
+
+		case $name in
+		  *-inc*manifest*)
+		  	[ "X$i_last_ts" = "X" ] && i_last_ts=$ts
+			i_cnt=$(($i_cnt + 1))
+		  	###printf ">> $tag $ts %-30s %s\n" "i_cnt=$i_cnt" $name ###
+		  	;;
+		  *-inc*)
+		  	i_size=$(($i_size + $size))
+			i_tsize=$(($i_tsize + $size))
+		  	###printf ">> $tag $ts %-30s %s\n" "i_size=$i_size" $name ###
+			;;
+		  *-full*signature*)
+			f_cnt=$(($f_cnt + 1))
+		  	###printf ">> $tag ts='$ts' i_last_ts='$i_last_ts' %-30s %s\n" "f_cnt=$f_cnt i_size=$i_size" $name ###
+			$f_long && {
+				f_print=$(printf "$lfmt_d" $f_cnt "$(pdate $ts)" "$(psize $f_size)")
+				if [ "$i_last_ts" != "" ] 
+				then
+					i_print=$(printf "$lfmt_d" $i_cnt "$(pdate $i_last_ts)" "$(psize $i_size)")
+				else
+					i_print=
+				fi
+				if is_disabled $tag
+				then
+					printf "$lfmt" "$tag (d)" "$f_print" "$i_print"
+				else
+					printf "$lfmt" $tag "$f_print" "$i_print"
+				fi
+			}
+			f_size=0
+			i_cnt=0
+			i_size=0
+			i_last_ts=
+		  	;;
+		  *-full*)
+		  	f_size=$(($f_size + $size))
+			f_tsize=$(($f_tsize + $size))
+		  	###printf ">> $tag $ts %-30s %s\n" "f_cnt=$f_cnt f_size=$f_size" $name ###
+			;;
+		  *)
+		  	i_size=$(($i_size + $size))
+			i_tsize=$(($i_tsize + $size))
+		  	###printf ">> $tag $ts %-30s %s\n" "???????" $name ###
+			;;
+		esac
+	done
+	exec 0<&9 9<&-
+	echocr
+
+	$f_long && continue
+
+	. $CfgDir/$tag
+	echocr " computing totals for dir $tag ($main_dir) ... " >&2
+	lsize=$(du -s "$main_dir" | sed -e 's/[ ,	].*//')
+	echocr
+	lsize=$(($lsize * 1024))
+	glsize=$((glsize + $lsize))
+
+	pc=$(echo -e "scale=2\n$tsize/$lsize*100" | bc)
+
+	printf "$fmt" "$tag" "$(psize $tsize)" "$(psize $lsize)" "$pc"
+	tsize=0
+done
+
+if $f_long
+then
+	printf "$lfmt" "$line" "$line" "$line"
+	f_print=$(printf "$lfmt_h" "" "TOTAL FULL" "$(psize $f_tsize)")
+	i_print=$(printf "$lfmt_h" "" "TOTAL INCR" "$(psize $i_tsize)")
+	printf "$lfmt" "" "$f_print" "$i_print"
+	echo
+	f_print=$(printf "$lfmt_h" "" "TOTAL (FULL+INCR)" "$(psize $gsize)")
+	printf "$lfmt" "" "" "$f_print"
+	echo
+else
+	echo
+	pc=$(echo -e "scale=2\n$gsize/$glsize*100" | bc)
+	printf "$fmt" "TOTAL" "$(psize $gsize)" "$(psize $glsize)" "$pc"
+	echo
+fi
+
+
+exit 0

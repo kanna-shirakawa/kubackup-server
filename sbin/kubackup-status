@@ -1,0 +1,439 @@
+#!/bin/bash
+#
+# __copy1__
+# __copy2__
+#
+CMD=$(basename "$0")
+CMDVER="3.1"
+CMDSTR="$CMD v$CMDVER (2020/06)"
+
+set -e -u
+
+usage()
+{
+	echo "
+# $CMDSTR == show status of last or current backup and related disk
+
+usage: $CMD mode
+
+modes:
+ -d|--disk		show disk status
+ -b|--backup		show backup status
+ -a|--all		show both
+ -V|--version		print command version
+ -c|--config file	uses config '/etc/kubackup-run-<file>.conf'
+ 			instead of $cfgfile
+ -l|--list-configs	prints the list of valid configs on this
+ 			machine (see below)
+ -H|--html		produce (sort of) html output
+ -i|--interactive	interactive mode (useful for *inetd run)
+
+interactive mode:
+ reads one input line, evaluating commands DISK, BACKUP or ALL (or
+ abbrevation chars D, B, A) and performing the related action
+
+ before sending an action request you can send the command CONFIG
+ (in the form CONFIG filename), to runtime load an alternate config
+
+configs list:
+ - STANDARD means the standard config (no custom one)
+
+ - if the file /etc/kubackup/valid_configs exists, the content is
+   used ad list; the list can be a serie of names separated by
+   spaces, or newlines; the names must match existing files in
+   /etc, using the pattern /etc/kubackup-run-<file>.conf; non
+   existent config files will cause corrispondent entry to be
+   silently discarded; the STANDARD keyword must be listed here,
+   if not the meaning is 'there is no standard one, only custom'
+
+ - if the file /etc/kubackup/valid_configs is missing or empty
+   all the names matching the config files in /etc will be
+   printed, with the STANDARD one (this is the difference to
+   have an emtpy or missing file)
+" >&2
+	sleep 1
+	exit 1
+}
+
+cleanup()
+{
+	# a simple way to avoid floods
+	sleep $sleeptime
+	return 0
+}
+
+
+print_header()
+{
+	$header_printed && return
+	echo
+	$f_html && echo "<h2>"
+	if [ "X$CustomCfg" = "X" ]
+	then
+		kubackup-tr $CMD title "$LABEL" "$(date '+%Y.%m.%d %H:%M:%S')"
+	else
+		kubackup-tr $CMD title "$LABEL ($CustomCfg)" "$(date '+%Y.%m.%d %H:%M:%S')"
+	fi
+	$f_html && echo "</h2>"
+	echo
+	$f_html && echo "<table>"
+	header_printed=true
+	return 0
+}
+
+list_configs()
+{
+	local filelist="/etc/kubackup/valid_configs"
+	local list=
+	local name=
+	local file=
+
+	if [ -f "$filelist" ]
+	then
+		[ -s "$filelist" ] && {
+			for name in $(cat "$filelist")
+			do
+				file="/etc/kubackup-run-$name.conf"
+				if [ -f "$file" ]
+				then
+					echo "$name"
+				else
+					if [ $name = "STANDARD" ]
+					then
+						echo "$name"
+					else
+						echo "list_configs() warn: file '$file' not exists" >&2
+					fi
+				fi
+			done
+			return 0
+		}
+	else
+		echo "STANDARD"
+	fi
+	for file in $(cd /etc; ls kubackup-run-*.conf 2>/dev/null || :)
+	do
+		name=${file/kubackup-run-/}
+		name=${name/.conf/}
+		echo "$name"
+	done
+	return 0
+}
+
+disk_status()
+{
+	print_header
+
+	local title=$(kubackup-tr $CMD disk-title)
+	local st_text=
+	local st_font=
+	local st_st=
+	local add_text=
+	local df=
+	local disk=
+	local diskinfos=
+	local disklabel=
+	local disktype=
+
+	$f_html && echo "<tr>"
+
+	if mountpoint $BCKDIR >/dev/null
+	then
+		st_text="$(kubackup-tr $CMD disk-mounted)"
+		st_font='color="green"'
+
+		df=$(df -h $BCKDIR)
+		disk=$(echo "$df" | tail -1 | sed -e 's/ .*//')
+		if diskinfos=$(blkid $disk 2>/dev/null)
+		then
+			disklabel=$(echo "$diskinfos" | sed -e 's/.* LABEL="//' -e 's/".*//')
+			disktype=$(echo "$diskinfos" | sed -e 's/.* TYPE="//' -e 's/".*//')
+			diskinfos="$disklabel, $disktype"
+		else
+			diskinfos="$disk"
+		fi
+
+		local ldisk=$( (cd $BCKDIR; ls LABEL_* 2>/dev/null) )
+
+		if [ "$ldisk" != "" ]
+		then
+			ldisk=$(echo "$ldisk" | sed -e 's/^LABEL_//')
+			if $(echo "$ldisk" | grep -q "${LABEL}[0-9][0-9]*")
+			then
+				st_st="OK"
+				st_text="$st_text ($ldisk, $diskinfos) - $(kubackup-tr $CMD disk-ready)"
+			else
+				st_st="ERR"
+				st_text="$st_text ($ldisk, $diskinfos) - $(kubackup-tr $CMD disk-wrong)"
+				st_font='color="red"'
+				add_text=$(kubckup-tr $CMD disk-wrong2 "$LABEL" "$ldisk")
+			fi
+		else
+			st_st="UNK"
+			st_text="$st_text ($diskinfos) - $(kubackup-tr $CMD disk-unk)"
+			st_font='color="red"'
+			add_text=$(kubackup-tr $CMD disk-unk2)
+		fi
+
+		add_text=$(mount | grep " $BCKDISK " | fgrep '(rw,') || :
+		if [ "$add_text" != "" ]
+		then
+			add_text=$(kubackup-tr $CMD disk-mnt-rw)
+			st_st="LCK"
+			st_font='color="blue"'
+		else
+			add_text=$(kubackup-tr $CMD disk-mnt-ro)
+		fi
+
+	else
+		st_st="NO"
+		st_text=$(kubackup-tr $CMD disk-not)
+		st_font='color="red"'
+	fi
+
+	if $f_html
+	then
+		echo " <td width=\"120px\">$title</td>"
+		local fmt=' <td width="30px" align="center"><p style="color: #000000; background-color: %s">%s</p></td>'
+		case $st_st in
+		  OK)	printf "$fmt" "#00FF00" "OK" ;;
+		  LCK)	printf "$fmt" "#FF8800" "LCK" ;;
+		  ERR)	printf "$fmt" "#FF0000" "ERR" ;;
+		  NO)	printf "$fmt" "#FFFF00" "--" ;;
+		  *)	printf "$fmt" "#FF0000" "??" ;;
+		esac
+		echo " <td><p><font $st_font><strong>$st_text</strong></font>"
+		[ "X$add_text" != "X" ] && echo "   <br><p>$add_text"
+		echo " </td>"
+		echo "<tr>"
+	else
+		echo "$title $st_text"
+		[ "$add_text" != "" ] && echo -e "\n  $add_text"
+	fi
+	return 0
+}
+
+
+backup_status()
+{
+	print_header
+
+	local title=$(kubackup-tr $CMD bck-title)
+	local st_text=
+	local is_running=false
+	local PID=
+
+	echo
+
+	$f_html && {
+		echo "<tr>"
+		echo " <td width=\"120px\">$title</td>"
+	}
+
+	local fmt=' <td align="center"><p style="color: #000000; background-color: %s">%s</p></td>'
+
+	# is running?
+	#
+	if ku_lock_is_active 2>/dev/null
+	then
+		PID=$(cat $KU_LOCKFILE)
+		st_text=$(kubackup-tr $CMD bck-running $PID)
+
+		$f_html && {
+		 	printf "$fmt" "#FF8800" "ooo"
+			echo " <td>$st_text</td>"
+			echo '</tr>'
+			echo '<tr>'
+			echo ' <td colspan="3">'
+			echo "  <pre>"
+		}
+
+		fgrep " P$PID " /var/log/kubackup-run | kubackup-parseoutput \
+			| sed -e 's/MISSING/running/' \
+			| htmlize
+
+		$f_html && {
+			echo '  </pre>'
+			echo ' </td>'
+			echo '</tr>'
+			echo '</tr>'
+			echo ' <td colspan="3">'
+			echo "  <pre>"
+		}
+
+		kubackup-tr $CMD bck-cur-rep
+		echo
+		local file=$(ls -tr $WORKDIR/*.log | tail -1)
+		tail -40 $file | col -b | tail -10
+
+		$f_html && {
+			echo '  </pre>'
+			echo ' </td>'
+			echo '</tr>'
+		}
+	else
+		if [ -f $LASTREPORT ]
+		then
+			st_text=$(kubackup-tr $CMD bck-lastrun)
+			if $f_html
+			then
+				if grep -q "ERR" $LASTREPORT
+				then
+					printf "$fmt" "#FF0000" "ERR"
+				else
+					printf "$fmt" "#00FF00" "OK"
+				fi
+				echo " <td>$st_text</td>"
+				echo '</tr>'
+				echo '<tr>'
+				echo ' <td colspan="3">'
+				echo '  <pre>'
+				htmlize < $LASTREPORT
+				echo '  </pre>'
+				echo ' </td>'
+				echo '</tr>'
+			else
+				echo -e "$title $st_text\n"
+				cat $LASTREPORT
+			fi
+		else
+			st_text=$(kubackup-tr $CMD bck-notyet)
+			if $f_html
+			then
+				printf "$fmt" "#FF0000" "--"
+				echo " <td>$st_text</td>"
+				echo '</tr>'
+			else
+				echo -e "$title $st_text\n"
+			fi
+		fi
+	fi
+
+	return 0
+}
+
+
+
+htmlize()
+{
+	if $f_html
+	then
+		sed \
+		  -e 's_ERROR\([^A-Z]\)_<strong>ERROR\1</strong>_g' \
+		  -e 's_ERR\([^A-Z]\)_<strong>ERR\1</strong>_g' \
+		  -e 's_WARNING\([^A-Z]\)_<strong>WARNING\1</strong>_g' \
+		  -e 's_WARN\([^A-Z]\)_<strong>WARN\1</strong>_g'
+	else
+		cat
+	fi
+	return 0
+}
+
+# (MAIN)
+
+# this is needed to check if the backup is running
+. /lib/ku-base/lock.sh
+
+cfgfile="/etc/kubackup-run.conf"
+CustomCfg=
+
+. $cfgfile
+
+# work dir
+#
+[ -f /etc/default/kusa-paths ] && . /etc/default/kusa-paths
+KUSA_PATH_WORKDIR=${KUSA_PATH_WORKDIR:-"/tmp"}
+
+export WORKDIR=$KUSA_PATH_WORKDIR/kubackup
+
+f_interactive=false
+f_disk=false
+f_backup=false
+f_html=false
+f_listconf=false
+header_printed=false
+sleeptime=1
+
+LASTREPORT="$WORKDIR/last-report.txt"
+
+while [ $# != 0 ]
+do
+  case $1 in
+    -V|--version)	echo "$CMDSTR"; exit 0 ;;
+    -i|--interactive)	f_interactive=true ;;
+    -d|--disk)		f_disk=true ;;
+    -b|--backup)	f_backup=true ;;
+    -a|--all)		f_disk=true; f_backup=true ;;
+    -H|--html)		f_html=true ;;
+    -l|--list-configs)	f_listconf=true ;;
+    -c|--config)		
+  	shift
+	[ $# = 0 ] && usage
+		CustomCfg=$1
+		cfgfile=/etc/kubackup-run-$CustomCfg.conf
+		[ -f $cfgfile ] || {
+			echo "$CMD error, config file '$cfgfile' not found" >&2
+			exit 1
+		}
+		. "$cfgfile"
+		LASTREPORT="$WORKDIR/last-report-$LABEL.txt"
+		;;
+    -*|"")		usage ;;
+    *)			usage ;;
+  esac
+  shift
+done
+
+export LANG=${KUBACKUP_LANG:-C}
+
+trap "cleanup" EXIT 1 2 3 ERR
+
+KU_LOCKFILE="/var/lock/kubackup-run-$LABEL.lock"
+
+
+$f_disk		&& disk_status
+$f_backup	&& backup_status
+$f_listconf	&& { list_configs; exit 0; }
+
+$f_interactive && {
+    while :
+    do
+	read -t 5 inp
+	set -- $inp
+	inp=$1; shift
+	inp=$(echo "$inp" | tr '[A-Z]' '[a-z]')
+	case $inp in
+	  V|version)	echo "$CMDSTR"; break ;;
+	  d|disk)	disk_status; break ;;
+	  b|backup)	backup_status; break ;;
+	  a|all)	disk_status; backup_status; break ;;
+	  l|listconf*)	list_configs; exit 0 ;;
+	  h|html)	f_html=true ;;
+	  c|config)
+		[ $# != 1 ] && {
+			echo "command usage: config config_name"
+			exit 1
+		}
+		CustomCfg=$1
+		cfgfile=/etc/kubackup-run-$CustomCfg.conf
+		[ -f $cfgfile ] || {
+			echo "config file '$cfgfile' not found"
+			exit 1
+		}
+		. "$cfgfile"
+		KU_LOCKFILE="/var/lock/kubackup-run-$LABEL.lock"
+		LASTREPORT="$WORKDIR/last-report-$CustomCfg.txt"
+		;;
+	*)
+		echo "wrong command: '$inp'"
+		exit 1
+		;;
+	esac
+	sleep $sleeptime
+	sleeptime=$(($sleeptime + 1))
+    done
+}
+
+$f_html && echo "</table>"
+
+exit 0

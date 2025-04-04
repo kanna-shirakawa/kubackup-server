@@ -1,0 +1,46 @@
+#!/bin/bash
+#
+# ::copy1::
+# ::copy2::
+#
+CMD=$(basename "$0")
+CMDVER="1.9"
+CMDSTR="$CMD v$CMDVER (2024-09-07)"
+
+# (MAIN)
+
+lines="-10"
+
+case ${1:-} in
+ -[0-9]*)	lines=$1; shift ;;
+esac
+
+# process running kubackup
+#
+ps axuwwww | grep "/bin/bash /usr/sbin/kubackup-run" | grep -v grep | tail -1
+echo
+
+# last 3 lines of logfile
+#
+tail -3 /var/log/kubackup-run
+echo
+
+# space usage/free on backup disk
+#
+bckdir=$(fgrep ' backup dir ' /var/log/kubackup-run | tail -1 \
+	| sed -e 's/.* backup dir //' -e 's/ .*//')
+
+df -m $bckdir
+echo
+
+# last $lines lines (see argument) of current mirror (rsync) process
+#
+last=$(ls -tr *.log | tail -1)
+new=$(find "$last" -newer /var/log/kubackup-run)
+[ "X$new" != "X" ] && {
+	echo "--[ $last ]------------------------------------------------------------"
+	echo
+	tail -100 "$last" | col -b | tail $lines
+}
+
+exit 0

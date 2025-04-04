@@ -1,0 +1,133 @@
+#!/bin/bash
+#
+# __copy1__
+# __copy2__
+#
+CMD=$(basename $0)
+CMDVER="1.7"
+CMDSTR="$CMD v$CMDVER (2018/11)"
+
+usage()
+{
+	echo "usage: $CMD" >&2
+	exit 1
+}
+
+get_slot()
+{
+	local sys=$1
+	if [ -s $CONFDIR/${sys}_slot ]
+	then
+		cat $CONFDIR/${sys}_slot
+	else
+		echo $sys | sed -e 's/\..*//'
+	fi
+	return 0
+}
+
+
+# (MAIN)
+
+CONFDIR="__CONF__"
+
+[ -d $CONFDIR ] || {
+	echo "error: config directory '$CONFDIR' not found" >&2
+	exit 1
+}
+cd $CONFDIR
+
+while [ $# != 0 ]
+do
+    case $1 in
+    	-*|"")		usage ;;
+	*)		usage ;;
+    esac
+    shift
+done
+
+temp=`mktemp /tmp/${CMD}-XXXXXXX` || exit $?
+config=/etc/rsyncd.conf
+tag="$CMD AUTO GENERATED ENTRIES"
+tagstart="# START OF $tag - DO NOT EDIT MANUALLY"
+tagend="# END OF $tag"
+
+# get defaults and defines
+#
+kconfig="/etc/kubackup-run.conf"
+[ -f $kconfig ] || {
+	echo -e "\nerror, config file $kconfig not found\n" >&2
+	exit 1
+}
+. $kconfig
+[ "X$BCKDIR" = "X" ] && {
+	echo -e "\nerror, you must define \$BCKDIR in $kconfig\n" >&2
+	exit 1
+}
+
+
+
+# 1. wipe out our entries from rsync config file
+#
+[ -f $config ] || {
+	:> $config || exit $?
+}
+
+echo "  copying original $config file"
+
+perl -w -s -e '
+	my $copy	= 1;
+	while (<>) {
+		if ($_ =~ /^$tagstart/) {
+			$copy = 0;
+			next;
+		}
+		if ($_ =~ /^$tagend/) {
+			$copy = 1;
+			next;
+		}
+		print "$_"	if ($copy);	# copy verbatim
+	}
+	exit(0);
+' -- -tagstart="$tagstart" -tagend="$tagend" <$config >$temp
+
+# 2. rebuild entries and append them to config file
+#
+
+echo -e "$tagstart\n" >>$temp
+
+for sys in `ls *_uuid 2>/dev/null`
+do
+	sys=`echo $sys | sed -e 's/_uuid//'`
+	uuid=`cat ${sys}_uuid`
+	allow=`[ -s ${sys}_allow ] && cat ${sys}_allow`
+	slot=`get_slot $sys`
+	nocomp=`[ -s ${sys}_dont_compress ] && cat ${sys}_dont_compress || echo "*"`
+
+	# serialize
+	allow=$(echo $allow)
+
+	echo "  adding system: $sys"
+
+	echo "[kubackup-$uuid]"					>>$temp
+	echo "  comment = backup slot for system '$sys'"	>>$temp
+	echo "  path = $BCKDIR/$slot"				>>$temp
+	echo "  uid = root"					>>$temp
+	echo "  gid = root"					>>$temp
+	echo "  read only = no"					>>$temp
+	echo "  write only = yes"				>>$temp
+	echo "  transfer logging = no"				>>$temp
+	echo "  dont compress = $nocomp"			>>$temp
+	echo "  list = no"					>>$temp
+	[ "$allow" != "" ] && echo "  hosts allow = $allow"	>>$temp
+	echo ""							>>$temp
+done
+
+echo -e "$tagend" >>$temp
+
+set -e
+echo "  replace $config file (old file saved in $config.old)"
+cp -af $config $config.old
+cat $temp >$config
+rm -f $temp
+
+exit 0

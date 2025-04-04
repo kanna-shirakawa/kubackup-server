@@ -1,0 +1,536 @@
+#!/bin/bash
+#
+# __copy1__
+# __copy2__
+#
+CMD=$(basename $0)
+CMDVER="1.3"
+CMDSTR="$CMD v$CMDVER (2020/07)"
+
+set -e -u
+
+CfgDir="/etc/$CMD"
+
+export F_EXEC=true
+export VERBOSE=false
+export DEBUG=false
+export LOGFILE=/var/log/$CMD
+export PID=$$
+
+export PATH=/root/bin:/usr/local/sbin:/usr/local/bin:/sbin:/usr/sbin:$PATH
+
+# functions
+#
+. /lib/ku-base/log.sh
+. /lib/ku-base/lock.sh
+
+
+# work dir
+#
+
+usage()
+{
+	echo "
+$CMDSTR - backup using 'duplicity'
+
+usage: $CMD [options] mode tag[,tag,tag...] [duplicity options]
+
+options:
+  -n|--dry-run
+  -c|--cfgdir DIR	set CfgDir (default: '$CfgDir')
+  -a|--all		runs on all tags
+  -f|--force		force run even if tag(s) are disabled
+  -v|--verbose
+  -q|--quiet
+  -D|--debug
+
+modes:
+  auto	   perform full backup first run, incr other runs
+  full	   force full backup
+  incr	   force incremental backup
+  verify   verify backup
+  list	   list current files
+  stat	   show actual backup sets and filechains
+  cleanup  perform cleanup
+
+  compact  DELETES backups, retains last 'max_fulls' full+incr backups
+  	   (\$max_fulls variable must be set in global.conf or specific
+	   tag config files); note that default is to list files only,
+	   you must define \$really_delete_backups='YES' to delete them
+
+- tag is the name of config file in CfgDir
+- many tags can be passed as single string, separated by comma
+- stat directory is actually '$ARCHIVEDIR'
+
+" >&2
+	[ $# != 0 ] && echo -e "\n$*\n" >&2
+	exit 1
+}
+
+cleanup()
+{
+	trap 1 2 3 EXIT
+	:
+}
+
+unlock_and_cleanup()
+{
+	trap 1 2 3 EXIT
+	ku_lock_remove
+	cleanup
+}
+
+
+
+my_log()
+{
+	if $VERBOSE
+	then
+		echo -e "$@"
+	else
+		ku_log "$@"
+	fi
+}
+
+fmt_time()
+{
+	local bits=$(echo -e "hh=$1/3600\nmm=($1-hh*3600)/60\nss=$1-mm*60-hh*3600\nhh\nmm\nss" | bc)
+	printf "%d:%02d:%02d" $bits
+}
+
+
+rundup()
+{
+	local mode=
+	local stat=
+	local t_start=$(date +%s)
+	local t_end=
+	local t_running=
+	local lockfile="$ARCHIVEDIR/$tag/lockfile.lock"
+	local force_flag=
+	local num=
+
+	$disabled && {
+		$f_force || {
+			log_err "  ($tag) error, is disabled, use --force to run anyway"
+			return 1
+		}
+		my_log "  (tag) is disabled, but --force uses, I will proceed"
+	}
+
+	case $1 in
+	 auto)	mode= ;;
+	 cleanup)
+	 	mode=$1
+		case ${post_backup_really_clean:-} in
+			true|[yY][eE][sS]|1) force_flag="--force" ;;
+		esac
+		;;
+	 compact)
+	 	mode="remove-all-but-n-full"
+		case ${really_delete_backups:-} in
+			YES)	force_flag="--force" ;;
+			"")	;; # OK
+			*)	log_err "error: \$really_delete_backup must be set to 'YES' or empty"
+				exit 1
+				;;
+		esac
+		case ${max_fulls:-} in
+			[0-9]*)	num=$max_fulls
+				;;
+			"")	log_err "error: you must define \$max_fulls number in config files to perform 'compact' action"
+				exit 1
+				;;
+			*)	log_err "error: \$max_fulls is not a number, check your config files(s)"
+				exit 1
+				;;
+		esac
+		;;
+
+	 *)	mode=$1 ;;
+	esac
+	shift
+
+
+	export FTP_PASSWORD="$remote_password"
+	export PASSPHRASE="$crypto_pass"
+
+	$DEBUG && set -x
+
+	duplicity \
+		$mode $num $global_opts \
+		-v $verbose_level \
+		--name $tag \
+		--archive-dir $ARCHIVEDIR \
+		$opts \
+		$parms \
+		$DryRun \
+		$force_flag \
+		"$@" || :
+		stat=$?
+
+	$DEBUG && set +x
+
+	# wtf ... lockfile will left around on crashes or timeouts
+	#
+	[ -f "$lockfile" ] && {
+		my_log "  ($tag) warning, removing stale lockfile '$lockfile'"
+		rm "$lockfile"
+	}
+
+	case $mode in
+	  coll*|list) ;;
+	  *)
+		t_end=$(date +%s)
+		t_running=$(expr $t_end - $t_start)
+		my_log "  ($tag) task duration: $(fmt_time $t_running) (${t_running}s)"
+		;;
+	esac
+
+	return $stat
+}
+
+err_var_not_set()
+{
+	log_err "error: var '$1' not defined in config file" >&2
+	return 1
+}
+
+sanity_checks()
+{
+	[ "X$remote_server" = "X" ]	&& { err_var_not_set 'remote_server'; return 1; }
+	[ "X$remote_port" = "X" ]	&& { err_var_not_set 'remote_port'; return 1; }
+	[ "X$remote_user" = "X" ]	&& { err_var_not_set 'remote_user'; return 1; }
+	[ "X$remote_password" = "X" ]	&& { err_var_not_set 'remote_password'; return 1; }
+
+	[ "X$main_dir" = "X" ]		&& { err_var_not_set 'main_dir'; return 1; }
+
+	disabled=$(boolean "disabled" "$disabled") || return 1
+
+	return 0
+}
+
+boolean()
+{
+	local varname=$1
+	local value=$2
+
+	case $value in
+	  [yY][eE][sS]|true|1)	echo true ;;
+	  [nN][oO]|false|0|"")	echo false ;;
+	  *) log_err "error: var '$varname' unknown value '$value', must be true/false, yes/no, 1/0"; return 1 ;;
+	esac
+	return 0
+}
+
+pdebug()
+{
+	$DEBUG || return 0
+	echo -e "#D ${FUNCNAME[1]}() $*" >&2
+}
+
+
+log_err()
+{
+	ku_log "$@"
+	#log_mail 1 "ERROR: $*"
+}
+
+
+
+run_tag()
+{
+	local mode=$1
+	local tag=$2
+	shift 2
+
+	local stat=
+	local parms=
+	local remote_url=
+
+	[ -f "$CfgDir/$tag" ] || {
+		my_log "  ($tag) error: config file '$CfgDir/$tag' not found" >&2
+		return 1
+	}
+
+	# first load global conf, then $tag conf
+	#
+	dest=
+	main_dir=
+	opts=
+	include=
+	exclude=
+	remote_type=
+	disabled=
+
+	[ -f $CfgDir/global.conf ] && . $CfgDir/global.conf
+	. $CfgDir/$tag
+
+	sanity_checks || return $?
+
+	# defaults
+	#
+	[ "X$dest" = "X" ] && dest=$tag
+
+	# build destination url
+	#
+	case $remote_type in
+	  ftp)
+		remote_url="ftp://$remote_user@$remote_server:$remote_port/$dest"
+		;;
+	  *)
+		log_err "error: remote_type '$remote_type' not supported" >&2
+		return 1
+		;;
+	esac
+
+	parms=
+
+	# build include/exclude list
+	#
+	for path in $include
+	do
+		parms="$parms --include $path"
+	done
+	for path in $exclude
+	do
+		parms="$parms --exclude $path"
+	done
+
+	case $mode in
+	 auto)		rundup auto "$@" "$main_dir" "$remote_url"; stat=$? ;;
+	 full)		rundup full "$@" "$main_dir" "$remote_url"; stat=$? ;;
+	 incr)		rundup incremental "$@" "$main_dir" "$remote_url"; stat=$? ;;
+	 cleanup)	rundup cleanup "$@" "$remote_url"; stat=$? ;;
+	 verify)	rundup verify "$@" "$remote_url" "$main_dir"; stat=$? ;;
+	 restore)	rundup restore "$remote_url" "$@"; stat=$? ;;
+	 compact)	rundup compact "$remote_url" "$@"; stat=$? ;;
+	 list)		verbose_level=1; rundup list-current-files "$remote_url"; stat=$? ;;
+	 stat)		verbose_level=1; rundup collection-status "$remote_url"; stat=$? ;;
+	esac
+
+	# 2nd stage, if needed
+	case $mode in
+	   auto|full|incr)
+		### nope, seems tha duplicity is smart enought to restore
+		### the last failed backup
+		###my_log "  ($tag) running cleanup after backup"
+	 	###rundup cleanup "$@" "$remote_url"
+		my_log "  ($tag) collecting stats"
+	 	verbose_level=1; rundup collection-status "$remote_url"
+		;;
+	esac
+
+	return $stat
+}
+
+
+
+
+
+# (MAIN)
+
+trap 'echo "unexpected exit $? on line $LINENO"' ERR
+trap "my_log '*INTR*'; cleanup; exit 255" 1 2 3
+trap 'cleanup' EXIT
+
+
+
+# work dir
+#   used to store logfile
+#
+# archive-dir
+#   used by duplicity to store meta-infos
+#
+#   instead of using $HOME/.cache/duplicity, we use $CMD-info,
+#   stored in $KUSA_PATH_WORKDIR (if defined) or in /etc
+#
+export TMPDIR
+export WORKDIR
+export ARCHIVEDIR
+
+[ -f /etc/default/kusa-paths ] && . /etc/default/kusa-paths
+TMPDIR=${TMPDIR:-$KUSA_PATH_TMPDIR}
+TMPDIR=${TMPDIR:-/tmp}
+
+if [ "X$KUSA_PATH_WORKDIR" != "X" ]
+then
+	WORKDIR="$KUSA_PATH_WORKDIR/$CMD"
+	ARCHIVEDIR="$KUSA_PATH_WORKDIR/${CMD}-info"
+else
+	WORKDIR="$TMPDIR/$CMD"
+	ARCHIVEDIR="/etc/${CMD}-info"
+fi
+
+# early parms checkup
+#
+DryRun=
+VERBOSE=true
+DEBUG=false
+f_all=false
+f_force=false
+
+while [ $# != 0 ]
+do
+  case $1 in
+    -v|--verbose)	VERBOSE=true ;;
+    -q|--quiet)		VERBOSE=false ;;
+    -D|--debug)		DEBUG=true ;;
+    -n|--dry-run)	DryRun="--dry-run" ;;
+    -a|--all)		f_all=true ;;
+    -f|--force)		f_force=true ;;
+    -c|--cfgdir)
+    	shift
+	[ $# = 0 ] && usage "error: --cfgdir option needs an argument"
+	[ -d "$1" ] || usage "error: config dir '$1' not found"
+	CfgDir=$1
+	;;
+    --)			break ;;
+    -*)			usage "unknown option '$1'" ;;
+    *)			break ;;
+  esac
+  shift
+done
+
+[ $# = 0 ] && usage
+mode=$1
+shift
+
+if $f_all
+then
+	tags=$( (
+		cd $CfgDir
+		grep -l "^main_dir=" * | while read cfg
+		do
+			disabled=false
+			eval $(grep "^disabled=" "$cfg") || :
+			[ $(boolean "disabled" "$disabled") = "true" ] && continue
+			echo $cfg
+		done
+	) )
+	tags=$(echo $tags)
+	pdebug "option --all, tags: $tags"
+else
+	[ $# = 0 ] && usage
+	tags=$1
+	shift
+fi
+
+
+case $mode in
+  auto|full|incr|list|stat|cleanup|compact) ;; # ok
+  verify|restore)
+  	echo "WARNING - $mode RUNS FOREVER ON SLOW LINES"
+	echo "(run in 5 seconds, Ctrl-C to abort) **"
+	sleep 5
+	;;
+  *) usage "unknown mode '$mode'" ;;
+esac
+
+
+for dir in $TMPDIR $WORKDIR $ARCHIVEDIR
+do
+	[ -d $dir ] || {
+		mkdir $dir || {
+			echo "can't create dir '$dir'"
+			exit 1
+		}
+	}
+done
+
+
+# logfile setup
+#
+$VERBOSE || {
+	ku_cap_logfile
+	exec >>$LOGFILE 2>&1
+}
+
+
+# aquire lock
+#
+KU_LOCKFILE="/var/lock/$CMD.lock"
+result=`ku_lock 2>&1` || {
+	my_log "$result"
+	exit 1
+}
+
+
+my_log "STARTED P$PID $CMD $*"
+my_log " CONFDIR=$CfgDir STATDIR=$ARCHIVEDIR"
+
+# global vars (from config files)
+#
+dest=
+main_dir=
+opts=
+include=
+exclude=
+remote_type=
+
+global_err=0
+stat=0
+logfile=
+
+trap "my_log '*INTR*'; unlock_and_cleanup; exit 255" 1 2 3
+trap "my_log '*INTR*'; killall duplicity; unlock_and_cleanup; killall duplicity; exit 255" 1 2 3
+trap 'unlock_and_cleanup' EXIT
+
+
+for tag in $(echo $tags | tr ',' ' ')
+do
+	stat=0
+
+	my_log " started tag: $tag"
+
+	if $VERBOSE
+	then
+		run_tag $mode $tag "$@" || stat=1
+	else
+		logfile="$WORKDIR/$tag.log"
+		my_log "  ($tag) quiet mode, logfile: $logfile"
+		[ -f $logfile ] && {
+			savelog -q -c 32 $logfile
+		}
+		run_tag $mode $tag "$@" >$logfile 2>&1 || stat=1
+		tail "$logfile" | grep -q 'BackendException: Error' && {
+			my_log "  ($tag) send backend error, see logfile"
+			stat=1
+		}
+		count_src=$(grep '^SourceFiles ' $logfile | sed -e 's/.* //')
+		count_new=$(grep '^NewFiles ' $logfile | sed -e 's/.* //')
+		size_src=$(grep '^SourceFileSize ' $logfile | sed -e 's/.*(//' -e 's/).*//')
+		size_new=$(grep '^NewFileSize ' $logfile | sed -e 's/.*(//' -e 's/).*//')
+		size_delta=$(grep '^RawDeltaSize ' $logfile | sed -e 's/.*(//' -e 's/).*//')
+		size_copy=$(grep '^TotalDestinationSizeChange ' $logfile | sed -e 's/.*(//' -e 's/).*//')
+
+		fmt1="  ($tag) %-20s %8d %-8s"
+		fmt2="  ($tag) %-20s         %-8s"
+
+		msg=$(printf "$fmt1" "source files:" "$count_src" "$size_src"); my_log "$msg"
+		msg=$(printf "$fmt1" "new/changed files:" "$count_new" "$size_new"); my_log "$msg"
+		msg=$(printf "$fmt2" "delta (backup):" "$size_delta"); my_log "$msg"
+		msg=$(printf "$fmt2" "transferred:" "$size_copy"); my_log "$msg"
+		
+		if [ $stat = 0 ]
+		then
+			my_log "  ($tag) ended ok"
+		else
+			my_log "  ($tag) ended WITH ERRORS!"
+		fi
+	fi
+	[ $stat != 0 ] && global_err=1
+done
+
+
+$VERBOSE || {
+	if [ $global_err = 0 ]
+	then
+		my_log "END, ok"
+	else
+		my_log "END, WITH ERRORS!"
+	fi
+}
+ku_lock_remove
+
+exit $global_err

@@ -1,0 +1,20 @@
+title		=== KUBACKUP DEL %s (%s) ===
+
+remove-disk	il disco di backup puo` essere rimosso
+no-remove-disk	DISCO ANCORA MONTATO IN SCRITTURA, NON RIMUOVERE
+
+ended-ok	OK,
+ended-errors	TERMINATO CON ERRORI!
+ended-ok-c	OK, [%s] 
+ended-errors-c	TERMINATO CON ERRORI! [%s] 
+
+err-title1	      *********************************************\n
+err-title2	         ATTENZIONE, BACKUP TERMINATO CON ERRORI\n
+
+hderr-title1	--------------
+hderr-title2	 ERRORE DISCO
+
+hderr-msg1	 Sembra che il problema sia stato causato da un errore fisico sul
+hderr-msg2	 disco utilizzato: %s
+hderr-already	 Questo disco ha gia` dato problemi %d volte:\n%s
+hderr-crappy-hd	 ATTENZIONE: disco inaffidabile, consigliata sostituzione!

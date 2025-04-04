@@ -1,0 +1,1472 @@
+#!/bin/bash
+# kubackup-run - kubackup program supervisor
+#
+# __copy1__
+# __copy2__
+#
+CMD=$(basename "$0")
+CMDVER="3.16"
+CMDSTR="$CMD v$CMDVER (2024-09-26)"
+
+CfgFile=/etc/$CMD.conf
+CustomCfg=
+verbose_flag=
+debug_flag=
+
+export F_EXEC=true
+export F_RUN_MIRROR=true
+export MIRROR_DRY_FLAG=
+export VERBOSE=false
+export DEBUG=false
+export LOGFILE=/var/log/$CMD
+export PID=$$
+
+export PATH=/root/bin:/usr/local/sbin:/usr/local/bin:/sbin:/usr/sbin:$PATH
+
+# global config vars
+#
+export CONFDIR="/etc/kubackup"
+export BCKDISK=
+export BCKDIR=
+export LABEL=
+export EMAIL=
+export MAILCMD=
+
+# runtime (computed) global vars
+#
+export REMOTECONF=
+export SYSTEMS=
+export BackupDev=		# 2017.08.04 lc
+export Disk_found=false
+export Disk_mounted=false	# disk was not mounted and I have mounted here
+export Disk_remounted=false	# disk was mounted ro and I have remounted rw
+
+
+# per-system config vars
+#
+SLOT=
+PREVDIR=
+CURDIR=
+
+# functions
+#
+. /lib/ku-base/log.sh
+. /lib/ku-base/lock.sh
+
+# work dir
+#
+[ -f /etc/default/kusa-paths ] && . /etc/default/kusa-paths
+KUSA_PATH_WORKDIR=${KUSA_PATH_WORKDIR:-"/tmp"}
+
+export WORKDIR=$KUSA_PATH_WORKDIR/kubackup
+export LASTREPORT="$WORKDIR/last-report.txt"
+
+[ -d $WORKDIR ] || {
+	mkdir $WORKDIR || {
+		echo "can't create working dir $WORKDIR"
+		exit 1
+	}
+}
+
+[ -f /etc/default/kusa-netservices ] && {
+	. /etc/default/kusa-netservices
+}
+KUSA_NETSERVICE_HDBACKUP=${KUSA_NETSERVICE_HDBACKUP:-"19001"}
+
+
+
+usage()
+{
+	echo "
+usage: $CMD [options] [systems]
+	
+options:
+  -v|--verbose		be verbose, don't send emails
+  -c|--config FILE	use 'FILE' instead of $CfgFile (or /etc/$CMD-FILE.conf)
+  -r|--remoteconf FILE	set remote kubackup config FILE under /etc
+  			(kubackup-FILE.conf instead of kubackup-$REMOTECONF.conf)
+  -n|--dry-run		don't exec, only show what will be done; actually:
+  			 . pre/post script are executed, use both --dry-run and --no-scripts
+			   to avoid running them; note that usually pre/post scripts will
+			   still respect the dry-run condition, so with -n you will have them
+			   run, but only to simulate actions
+			 . mirror commands are NOT executed, use -N instead of -n for have
+			   them run, but in dry-run mode
+  -s|--no-scripts	don't run pre/post scripts
+  -N|--dummy-mirror	the same as --dry-run, but runs 'mirror' commands, in dummy mode
+  		        (with -n flag)
+  -m|--no-mail		don't send report email (note that emails are still sent on errors,
+  			use --no-email-really to stop all of them)
+  -M|--no-mail-really	don't send any email
+  -C|--writecache	write cache after backup (when defined for system)
+  -U|--usecache		sync copies from cache before backup
+  -D|--debug		debug messages
+  -t|--timeout time	set rsync timeout (see 'timeout' command for details)
+
+select options:
+  -g|--group group	run only for system matching 'group', multiple instance allowed
+  -p|--precedence N	run only for system which precedence is less or equal N
+
+" >&2
+	[ $# != 0 ] && echo -e "\n$@\n" >&2
+	exit 1
+}
+
+cleanup()
+{
+	if $DEBUG
+	then
+		echo "#D temp files left in '$WORKDIR'"
+	else
+		rm -f $WORKDIR/${CMD}-tmp-* || :
+	fi
+	return 0
+}
+
+pdebug()
+{
+	$DEBUG || return 0
+	echo -e "#D ${FUNCNAME[1]}() $*" >&2
+}
+
+
+log_err()
+{
+	ku_log "$@"
+	log_mail 1 "ERROR: $*"
+}
+
+log_mail()
+{
+	local stat=$1 ; shift
+	local msg="$*"
+	local email=
+	local line="=============================================================="
+	local tmp=$(mktemp $WORKDIR/$CMD-tmp-mail-XXXXXX)
+	local hderror_log="/var/log/$CMD-hderrors"
+	local timestamp=$(date '+%Y/%m/%d-%H%M%S')
+	local hderror_cnt=
+	local hderror_prev=
+	local buf=
+
+	:> $tmp
+	:> $LASTREPORT
+
+	echo >>$LASTREPORT
+	kubackup-tr $CMD title "$DisplayStartDate" "PID=$PID"	>>$LASTREPORT
+	echo >>$LASTREPORT
+
+	if [ $stat != 0 ]
+	then
+	    (
+		echo
+		kubackup-tr $CMD err-title1
+		kubackup-tr $CMD err-title2
+		kubackup-tr $CMD err-title1
+		echo
+		[ "$HDERROR" != "" ] && {
+			kubackup-tr $CMD hderr-title1
+			kubackup-tr $CMD hderr-title2
+			kubackup-tr $CMD hderr-title1
+			echo
+			kubackup-tr $CMD hderr-msg1
+			kubackup-tr $CMD hderr-msg2 $LABEL
+			echo
+			echo "$HDERROR"
+			echo
+			[ -f $hderror_log ] || :> $hderror_log
+			hderror_cnt=0
+			hderror_prev=$(grep "^$LABEL " $hderror_log | sed -e "s/^$LABEL //")
+			[ -z "$hderror_prev" ] || {
+				set $hderror_prev
+				hderror_cnt=$#
+				kubackup-tr $CMD hderr-already $hderror_cnt "$hderror_prev"
+				echo
+			}
+			[ $hderror_cnt -gt 2 ] && {
+			  	kubackup-tr $CMD hderr-crappy-hd
+				echo
+			}
+			buf=$(grep -v "^$LABEL " $hderror_log)
+			buf="$buf\n$LABEL $hderror_prev $timestamp"
+			cp -a $hderror_log $hderror_log.old
+			echo -e "$buf" | sort >$hderror_log
+		}
+	    )>>$LASTREPORT
+	fi
+
+	grep " P$PID " $LOGFILE | egrep "^$DayStart|^$DayEnd" | kubackup-parseoutput >>$LASTREPORT
+
+
+	[ "$EMAIL" ] || return 0
+	$send_mail || {
+		[ $stat = 0 ] && return 0
+		$send_error_mail || return 0
+	}
+
+	# send email(s)
+
+	cat $LASTREPORT >$tmp
+
+	(
+	  echo "=== REPORT: $LOGFILE == START: $DayStart $line"
+	  grep " P$PID " $LOGFILE | sed \
+		-e "s/$DayStart //" \
+		-e "s/$DayEnd //" \
+		-e "s/ P$PID / /"
+	  echo "=== REPORT: $LOGFILE == END: $DayEnd $line"
+
+	  echo
+	  echo "--"
+	  echo "  $CMDSTR"
+	  echo "  * your friendly backup robot *"
+	) >>$tmp
+
+	for email in $EMAIL
+	do
+		$MAILCMD -s "$CMD $LABEL $msg" $email <$tmp
+		ku_log "  report email sent to '$email'"
+	done
+
+	rm -f $tmp
+}
+
+
+check_disk_label()
+{
+	local bckdir=$1
+
+	label=$( (cd $bckdir ; ls LABEL_* 2>/dev/null | sed -e 's/LABEL_//') )
+
+
+	case "$label" in
+		${LABEL}[0-9]*)
+			ku_log "  check label: bckdir=$bckdir expected='${LABEL}[0-9]*' found='$label' -- OK"
+			;;
+		*)
+			mountpoint -q $bckdir && \
+				ku_log "  check label: bckdir=$bckdir expected='${LABEL}[0-9]*' found='$label'"
+			return 1
+			;;
+	esac
+	LABEL=$(echo "$label" | sed -e 's/LABEL_//')
+	return 0
+}
+
+setup_slot()
+{
+	local out=
+	local date=
+	local dirbase=
+	local lastdir=
+	local slotdir=
+	local realdir=
+	local dirs_on_disk=
+
+	dirs_on_disk=$(ls -dr1 $BCKDIR/${SYS_slot}_[0-9]* $BCKDIR/${SYS_slot} 2>/dev/null || :)
+	pdebug "current directories on disk:\n$dirs_on_disk"
+
+	PREVDIR=
+	CURDIR=
+
+	[ "X$dirs_on_disk" != "X" ] && PREVDIR=$(echo "$dirs_on_disk" | head -1)
+
+	slotdir=$BCKDIR/$SYS_slot ; slotdir=$(dirname $slotdir)
+	realdir=$BCKDIR/$SYS_slot ; realdir=$(basename $realdir)
+
+	[ -d $slotdir ] || {
+		out=$(mkdir -p $slotdir 2>&1) || {
+			ku_log "  ($SYS_name) ERR can't creat slotdir: $out"
+			return 1
+		}
+		ku_log "  ($SYS_name) created slotdir: '$slotdir'"
+	}
+
+	[ -w $slotdir ] || {
+		ku_log "  ($SYS_name) ERR slotdir not writeable: '$slotdir'"
+		return 1
+	}
+
+	if [ "$SYS_rotations" -gt 1 ]
+	then
+		date=$(date '+%Y.%m.%d-%H.%M')
+		dirbase="${realdir}_0000"
+
+		# do rotation?
+		#
+		set $( (cd $slotdir ; ls -d ${realdir}_[0-9]* 2>/dev/null | wc -l) )
+		[ "$1" -ge "$SYS_rotations" ] && {
+			lastdir=$( (cd $slotdir ; ls -d ${realdir}_[0-9]* 2>/dev/null | head -1) )
+			ku_log "  ${DummyTag}rotate $lastdir -> ${realdir}_$date (in $slotdir)"
+			$F_EXEC && {
+				(cd $slotdir ; mv $lastdir ${realdir}_$date) || return 1
+			}
+			CURDIR="$slotdir/${realdir}_$date"
+		}
+
+		# rotations just activated?
+		#  - rename the 'sysname' directory in 'sysname_0000', as starting linkbase
+		#
+		if [ ! -L $slotdir/$realdir -a -d $slotdir/$realdir ]
+		then
+			ku_log "  ${DummyTag}rotation activated, renaming $realdir -> $dirbase"
+			$F_EXEC && {
+				(cd $slotdir; mv $realdir $dirbase) || return 1
+			}
+			PREVDIR="$slotdir/$dirbase"
+		fi
+
+		$F_EXEC && {
+			create_dir -p $slotdir/${realdir}_$date	|| return 1
+			rm -f $slotdir/$realdir
+			(cd $slotdir ; ln -s ${realdir}_$date $realdir) || return 1
+		}
+	else
+		# no rotation, check for dir existence
+		#
+		$F_EXEC && {
+			create_dir -p $slotdir/$realdir || return 1
+		}
+		CURDIR="$slotdir/$realdir"
+	fi
+
+	# set rsyncd module name (slot)
+	#
+	SLOT="kubackup-$SYS_uuid"
+
+	pdebug "SLOT='$SLOT'"
+	pdebug "PREVDIR='$PREVDIR'"
+	pdebug "CURDIR='$CURDIR'"
+	return 0
+}
+
+create_dir()
+{
+	local parms=
+	[ "X$1" = "X-p" ] && {
+		parms="-p"
+		shift
+	}
+
+	[ -d "$1" ] || {
+		ku_log "  creating dir '$1'"
+		out=$(mkdir $parms "$1" 2>&1) || {
+			echo "error $? creating dir '$1'" >>$TMPERR
+			echo "$out" >>$TMPERR
+			return 1
+		}
+		chmod 755 "$1"
+	}
+	return 0
+
+}
+
+
+cache_to_slot()
+{
+	local logfile="$WORKDIR/${SYS_name}-cache_to_slot.log"
+	local tag="cache preload"
+	local stat=0
+
+	[ "X$SYS_cache" = "X" ] && return 0	# no cache
+
+	[ -d "$SYS_cache" ] || {
+		ku_log "  warning $SYS_name: ignoring cachedir '$SYS_cache' (not exists)"
+		return 0
+	}
+
+
+	ku_log "   $SYS_name  $tag started"
+	ku_log "   $SYS_name  $tag   logfile=$logfile"
+
+	if [ "$SYS_rotations" -gt 1 ]
+	then
+		ku_log "   $SYS_name  $tag   PREVDIR=$PREVDIR"
+		$DummyCmd mirror $MIRROR_DRY_FLAG -f --all "$cachedir" "$BCKDIR/$SYS_slot" --link-dest="$PREVDIR" >$logfile 2>&1
+		stat=$?
+	else
+		$DummyCmd mirror $MIRROR_DRY_FLAG -f --all "$cachedir" "$BCKDIR/$SYS_slot" >$logfile 2>&1
+		stat=$?
+	fi
+
+	ku_log "   $SYS_name  $tag done, status=$stat"
+	return $stat
+}
+
+slot_to_cache()
+{
+	local logfile="$WORKDIR/${SYS_name}-slot_to_cache.log"
+	local tag="cache update"
+	local stat=0
+
+	[ "X$SYS_cache" = "X" ] && return 0	# no cache
+
+	create_dir '$SYS_cache' || {
+		ku_log "  WARN ($SYS_name) don't update cache, can't create dir '$SYS_cache'"
+		return 0
+	}
+		
+	ku_log "   $SYS_name  $tag started"
+	ku_log "   $SYS_name  $tag   logfile=$logfile"
+	$DummyCmd mirror $MIRROR_DRY_FLAG -f "$BCKDIR/$SYS_slot" "$SYS_cache" >$logfile 2>&1
+	stat=$?
+	ku_log "   $SYS_name  $tag done, status=$stat"
+	return $stat
+}
+
+
+cache_previous_copy()
+{
+	local dir=$1
+	local logfile="$WORKDIR/${SYS_name}-cache_previous_copy-$dir.log"
+	local stat=0
+	local tag="cache prev-copy"
+
+	[ -z "$PREVDIR" ] && return 0	# no previous directory
+
+	ku_log "   $SYS_name  $tag started on $dir"
+	ku_log "   $SYS_name  $tag   PREVDIR=$PREVDIR"
+	ku_log "   $SYS_name  $tag   logfile=$logfile"
+	if $VERBOSE
+	then
+		$DummyCmd mirror $MIRROR_DRY_FLAG -f "$PREVDIR/$dir" "$CURDIR/$dir" 2>&1 | tee $logfile
+		stat=$?
+	else
+		$DummyCmd mirror $MIRROR_DRY_FLAG -f "$PREVDIR/$dir" "$CURDIR/$dir" >$logfile 2>&1
+		stat=$?
+	fi
+	ku_log "   $SYS_name  $tag done, status=$stat"
+	return 0
+}
+
+
+
+
+run_copy_procedure()
+{
+	if $(kubackup-getconf --bool $SYS_name direct)
+	then
+		run_direct_rsync_call
+	else
+		call_client_daemon 2>&1
+	fi
+}
+
+run_direct_rsync_call()
+{
+	local errfile=$(mktemp $WORKDIR/${CMD}-tmp-direct-errfile-XXXXXX)
+	local rotation_mirror_parms=
+	local reportpath=		# real full path, used for stats
+	local f_saveperms="false"
+	local excludes=
+	local stat=0
+	local pass_parm=
+	local flags=
+	local winparm=
+	local parm_xattrs=
+	local backup_mode_parm=
+	local cache_previous_copy=
+	local msg=
+	local timeout=
+	local port=
+
+	# direct rsync call, the name must have the syntax:
+	#
+	#	system/user:password@module
+	#
+	# the user:pass@module part can be repeated for multiple modules (dirs),
+	# using "/" as separator
+	# user and password are optional
+	#
+	ku_log "  starting system: $SYS_name (direct)"
+
+	target_dir=$BCKDIR/$SYS_slot
+
+	if [ "$SYS_rotations" -gt 1 ]
+	then
+		ku_log "  using path: $target_dir (base=$PREVDIR)"
+	else
+		ku_log "  using path: $target_dir"
+	fi
+
+	# check if at least one module as 'saveperms' flag (the flag is global,
+	# but at the moment must be declared on one dir entry); bwt --nx parm
+	# passed to mirror program is still related to single dir entry
+	#
+	f_saveperms="false"
+	kubackup-getconf --terse $SYS_name modules | detect_saveperms_flag && f_saveperms=true
+
+	$f_saveperms && {
+		ku_log "  running 'saveperms' on target system"
+		echo "start $verbose_flag --slot $SLOT --config $remoteconf --only-saveperms " \
+	    		| nc -q -1 -w 300 $SYS_name $KUSA_NETSERVICE_HDBACKUP
+		sleep 2
+	}
+
+	kubackup-getconf --terse $SYS_name modules | while :
+	do
+		# 2014.02.15 lc
+		#	fix: with -e bash options active we cannot use while read ...
+		#	directly, because the subshell spawned by pipeline will exits early
+		#	with error when read fails, so we need to hack using a forever
+		#	loop (while :) and check for pipeline input EOF to exit (break)
+		#	the loop
+		#
+		read module dir user password args || break
+
+		[ "$module" = "" ] && continue
+		[ "$dir" = "" ] && {
+			ku_log "  error, you must define 'dir' in $SYS_modulesfile"
+			ku_log "    lines should be: module dir[,flags] [user [password [args]]]"
+			ku_log "    actual line: $module $dir $user $password $args"
+			continue
+		}
+		[ X"$user" = X- ] && user=
+		[ X"$password" = X- ] && password=
+
+		# additional parms for module
+		#
+		flags=
+
+		echo "$module" | grep -q "," && {
+			flags=$(echo $module | sed -e 's/.*,//')
+			module=$(echo $module | sed -e 's/,.*//')
+		}
+
+
+
+		dir=$(echo "$dir" | sed -e 's/\^/ /g')
+		url=$SYS_address
+		tmpfile=
+
+		[ "$password" != "" ] && {
+			tmpfile=$(mktemp $WORKDIR/${CMD}-tmp-p-XXXXXX) || continue
+			chmod 700 $tmpfile
+			echo $password >$tmpfile
+			pass_parm="--password-file=$tmpfile"
+		}
+		[ "X$user" != "X" ] && url="${user}@$SYS_address"
+
+
+		# PATHNAMES
+
+		# mangled target dir, becomes:
+		#
+		#  win     C or C_Games       (C_ if env KUBACKUP_MAGLEDIR_COMPATMODE=true)
+		#  linux   _ (for /) or _usr
+		#
+		dest=$(kubackup-mangledir $module $dir)
+		reportpath=$dest
+
+
+		winparm="--win"
+		parm_xattrs=
+		backup_mode_parm="--backup"
+		cache_previous_copy=false
+
+		[ -z "$flags" ] || {
+		    ku_log "  module $dest flags:"
+		    echo "$flags" | fgrep -qi 'L' && {
+			winparm=
+			ku_log "    L (linux filesystem)"
+		    }
+		    echo "$flags" | fgrep -qi 'X' && {
+			parm_xattrs="--xattrs"
+			ku_log "    X (xattrs)"
+		    }
+		    echo "$flags" | fgrep -qi 'A' && {
+			backup_mode_parm="--all"
+			ku_log "    A (--all, full backup)"
+		    }
+		    echo "$flags" | fgrep -qi 'C' && {
+			cache_previous_copy=true
+			ku_log "    C (cache previous-copy)"
+		    }
+		    echo "$flags" | grep -qi 'T=' && {
+		    	timeout=$(echo "$flags" | sed -e 's/.*T=\([0-9][0-9.]*[smh]*\).*/\1/')
+			timeout="--timeout $timeout"
+			ku_log "    T ($timeout)"
+		    }
+		}
+
+		[ "X$timeout" = "X" ] && {
+			[ "X$SYS_timeout" != "X" ] && {
+				ku_log "  set timeout from system config: $SYS_timeout"
+				timeout="--timeout $SYS_timeout"
+			}
+		}
+		[ "X$timeout" = "X" ] && {
+			[ "X$Timeout" != "X" ] && {
+				ku_log "  set timeout from config/args: $Timeout"
+				timeout="--timeout $Timeout"
+			}
+		}
+
+		[ "X$SYS_port" != "X" ] && port="--port $SYS_port"
+
+		# rotations, uses hard-link versus previous dir, but is incompatible
+		#	with --inplace: an hardlinked file is overwritten without
+		#	the necessary remove/create-new sequence, the result is that
+		#	ALL hardlinked files are updated
+		#	however --inplace option boost performances, so we can use it
+		#	if rotations are not needed
+		#
+		if [ "$SYS_rotations" -gt 1 -a "$PREVDIR" != "" ]
+		then
+			rotation_mirror_parms="--link-dest=$PREVDIR/$dest"
+		else
+			rotation_mirror_parms="--inplace"
+		fi
+
+
+		$cache_previous_copy && {
+			cache_previous_copy $dest || :
+		}
+
+		# emulates basic kubackup-net behaviour
+		#
+		logfile="$WORKDIR/kubackup-${SYS_name}-$dest.log"
+		stat=0
+		echo "STAT mirroring $reportpath"
+		echo "STAT logfile: $logfile"
+
+		echo "$(date) started kubackup" >>$logfile
+
+		# add standard exclusions
+		#
+		#  _win_common_excludes		if present and win type
+		#  _common_excludes		if present and linux type
+		#
+		#  system_excludes		if present
+		#  system_modulename_excludes	if present
+		#
+
+		excludes=
+		if [ X"$winparm" != X ]
+		then
+			[ -f $CONFDIR/_win_common_excludes ] && \
+				excludes="--xf $CONFDIR/_win_common_excludes"
+		else
+			[ -f $CONFDIR/_common_excludes ] && \
+				excludes="--xf $CONFDIR/_common_excludes"
+		fi
+		[ -f $CONFDIR/${SYS_name}_excludes ] && \
+			excludes="$excludes --xf $CONFDIR/${SYS_name}_excludes"
+
+		msg=$(echo $DummyCmd mirror $MIRROR_DRY_FLAG $debug_flag $timeout -f \
+			$winparm $backup_mode_parm $parm_xattrs \
+			$excludes \
+		    	"$url::$module/$dir" $target_dir/$dest \
+			--one-file-system --delete-excluded --itemize-changes \
+			$port $rotation_mirror_parms $pass_parm $args
+		)
+
+		echo "STAT running: $msg"
+
+		if $VERBOSE
+		then
+		    (
+			$DummyCmd mirror $MIRROR_DRY_FLAG $debug_flag $timeout -f \
+			$winparm $backup_mode_parm $parm_xattrs \
+			$excludes \
+		    	"$url::$module/$dir" $target_dir/$dest \
+			--one-file-system --delete-excluded --itemize-changes \
+			$port $rotation_mirror_parms $pass_parm $args \
+			2>&1 ; echo $? >$errfile
+		    ) | tee $logfile
+		    stat=$(cat $errfile)
+		    :> $errfile
+		else
+		    $DummyCmd mirror $MIRROR_DRY_FLAG $debug_flag $timeout -f \
+			$winparm $backup_mode_parm $parm_xattrs \
+			$excludes \
+		    	"$url::$module/$dir" $target_dir/$dest \
+			--one-file-system --delete-excluded --itemize-changes \
+			$port $rotation_mirror_parms $pass_parm $args \
+			>$logfile 2>&1
+		    stat=$?
+		fi
+		
+		egrep "^sent |^total " $logfile | while read line
+		do
+			case $line in
+				sent*)          echo "STAT $reportpath $line" ;;
+				total*)         echo "STAT $reportpath $line" ;;
+			esac
+		done
+
+		if [ $stat = 0 ]
+		then
+			echo "STAT ok $reportpath"
+		else
+			# MINOR ERRORS -> WARNINGS MANAGEMENT
+			# -----------------------------------
+
+			# WINDOWS locked files
+			#
+			# due actual implementation of rsync on windows, locked files cannot be
+			# read (rsync compiled with cygwin libraries, no VSS support)
+			# we consider them warnings, not errors; btw we have the logfile
+			# saved as error file, if we need to investigate
+			#
+			# error messages line example:
+			#    rsync: send_files failed to open "somepath/__lock" (in users): Device or resource busy (16)
+			#
+			[ X"$winparm" != "X" ] && {
+				grep -q 'failed to open.*resource busy' $logfile && {
+					egrep -i "rsync error|rsync: .*failed" $logfile | col -b \
+						| grep -v 'failed to open.*resource busy' \
+						| grep -v 'rsync error: some files/attrs were not transferred' \
+						| grep -v 'Device or resource busy' \
+						> $errfile
+					[ -s $errfile ] || {
+						# no other error messages
+						stat=0
+						save_logfile=${logfile}.warn-$(date '+%Y%m%d-%H%M')
+						echo "STAT WARNING failed to copy some locked files"
+						ku_log "WARNING failed to copy some locked files, for details see '$save_logfile'"
+						mv $logfile $save_logfile
+						echo "STAT logfile saved as $save_logfile"
+					}
+				}
+			}
+
+
+			# LINUX nfs stale handles
+			#
+			# nfs sometime lose connection to the server, and cannot manage to
+			# reconnect, causing the mounted tree to be inaccessibile
+			# we don't really care about this, because backups are ALWAYS done
+			# per single filesystem; sure, you can explicitly define a mounted
+			# nfs filesystem to backup, but it's not a good pratice
+			#
+			# error messages line example:
+			#    rsync: readlink_stat("/w/server/pvt" (in bck_)) failed: Stale file handle (116)
+			#    IO error encountered -- skipping file deletion
+			#
+			[ X"$winparm" = "X" ] && {
+				grep -q 'failed: Stale file handle' $logfile && {
+					egrep -i "rsync error|rsync: .*failed" $logfile | col -b \
+						| grep -v 'failed: Stale file handle' \
+						| grep -v 'rsync error: some files/attrs were not transferred' \
+						| grep -v 'IO error .* skipping file deletion' \
+						> $errfile
+					[ -s $errfile ] || {
+						# no other error messages
+						stat=0
+						save_logfile=${logfile}.warn-$(date '+%Y%m%d-%H%M')
+						echo "STAT WARNING NFS Stale file handle found"
+						ku_log "WARNING NFS Stale file handle found, for details see '$save_logfile'"
+						mv $logfile $save_logfile
+						echo "STAT logfile saved as $save_logfile"
+					}
+				}
+			}
+		fi
+
+
+		if [ $stat != 0 ]
+		then
+			egrep -i "rsync error|rsync: .*failed" $logfile | col -b | sed -e 's/^/ERR /'
+			echo "ERR on $reportpath"
+			echo "$stat" >$errfile
+			save_logfile=${logfile}.err-$(date '+%Y%m%d-%H%M')
+			mv $logfile $save_logfile
+			echo "STAT logfile saved as $save_logfile"
+		fi
+
+		# saves logfile on the backup disk
+		#
+		if [ "${save_logfile:-}" = "" ]
+		then
+			$DummyCmd cp $logfile "$target_dir/$dest-kubackup.log"
+			echo "STAT logfile saved on backup disk as '$target_dir/$dest-kubackup.log'"
+		else
+			$DummyCmd cp $save_logfile "$target_dir/$dest-kubackup.err"
+			echo "STAT logfile saved on backup disk as '$target_dir/$dest-kubackup.err'"
+		fi
+
+		[ "$tmpfile" != "" ] && rm -f $tmpfile
+	done
+
+	if [ -s $errfile ]
+	then
+		echo "STAT exiting with errors!"
+		echo "STAT ended status $(cat $errfile)"
+	else
+		echo "STAT exiting ok"
+		echo "STAT ended status 0"
+	fi
+
+	$f_saveperms && {
+		ku_log "  running 'removeperms' on target system"
+		echo "start $verbose_flag --slot $SLOT --config $remoteconf --only-removeperms " \
+	    		| nc -q -1 -w 300 $SYS_address $KUSA_NETSERVICE_HDBACKUP
+		sleep 2
+	}
+
+	return 0
+}
+
+detect_saveperms_flag()
+{
+	local flags=
+
+	while read module dir user password args
+	do
+		[ "$module" = "" ] && continue
+		[ "$dir" = "" ] && continue
+		echo "$module" | fgrep -q "," || continue
+		flags=$(echo $module | sed -e 's/.*,//')
+		echo "$flags" | fgrep -qi "x" && return 0
+	done
+	return 1
+}
+
+
+call_client_daemon()
+{
+	local sys=$SYS_name
+	local timeout=
+	local pid=
+	local cmd=
+
+	[ "X$SYS_timeout" != "X" ] && {
+		timeout=$SYS_timeout
+		ku_log "  set remote timeout from system config: $timeout"
+	}
+
+	[ "X$timeout" = "X" -a "X$Timeout" != "X" ] && {
+		timeout="$Timeout"
+		ku_log "  set remote timeout from config/args: $timeout"
+	}
+
+	[ "X$timeout" = "X" ] && {
+		timeout="3600"
+		ku_log "  set remote timeout from default: $timeout"
+	}
+
+	# indirect (and default) mode, call a daemon on client to start rsync backup
+	#
+	ku_log "  starting system: $SYS_name"
+	cmd="start $verbose_flag --slot $SLOT --config $remoteconf"
+	if $F_EXEC
+	then
+		echo "$cmd" | nc -q -1 -w $timeout $SYS_address $KUSA_NETSERVICE_HDBACKUP
+		sleep 4
+	else
+		echo "DRY_RUN_(remote service $SYS_address:$KUSA_NETSERVICE_HDBACKUP $cmd)"
+	fi
+        process=$(ps --no-headers --ppid $$ -o pid,args | fgrep rsync | fgrep -v fgrep)
+	[ "$process" != "" ] && {
+		pid=$(echo "$process" | cut -d' ' -f1)
+		args=$(echo "$process" | sed -e "s/^$pid //")
+		ku_log "ERR timeout on system: $SYS_name"
+		ku_log "ERR rsync process still active: $pid $args"
+		kill $pid
+		sleep 2
+		kill -9 $pid
+		sleep 2
+	}
+}
+
+
+alix_led_status()
+{
+	[ -x /bin/alix-led ] && /bin/alix-led $1
+}
+
+
+mount_backup_disk()
+{
+	local disk=
+	local dev=
+	local msg=
+
+	# 2017.08.04 lc
+	# first check for label, maybe that the disk is already mounted
+	# or is simply a directory on filesystem
+	#
+	if check_disk_label $BCKDIR
+	then
+		Disk_found=true
+	else
+		# if not, try to mount disk(s) and search for labels
+		#
+		for disk in $BCKDISK
+		do
+			ku_log "  try to mount: $disk"
+			mount $disk >>$LOGFILE 2>&1 ||	continue
+			Disk_mounted=true
+			check_disk_label $BCKDIR && {
+				Disk_found=true
+				break
+			}
+			ku_log "  label not found, umount: $disk"
+			umount $disk >>$LOGFILE 2>&1
+		done
+	fi
+
+	$Disk_found || {
+		log_err "backup disk not found or not configured"
+		$Disk_mounted && umount $disk >>$LOGFILE 2>&1
+		return 1
+	}
+
+
+	alix_led_status hdd-inuse
+
+	# find device (only if $BCKDIR is a direct mountpoint)
+	#
+	if mountpoint -q $BCKDIR
+	then
+		dev=$(grep " $BCKDIR " /proc/mounts | cut -d' ' -f1)
+		[ "$dev" = "" ] && {
+			log_err "can't find device, disk mounted on wrong dir?"
+			$Disk_mounted && umount $disk >>$LOGFILE 2>&1
+			return 1
+		}
+		ku_log "  backup dir $BCKDIR found on device $dev"
+			
+		# check if disk is mounted ro, so I must try to remount rw
+		#
+		grep "$dev " /proc/mounts | grep -q " ro," && {
+			ku_log "  disk on $dev 'readonly', remounting 'readwrite'"
+			mount -oremount,rw $dev || {
+				log_err "ERR $? remount $dev readwrite"
+				$Disk_mounted && umount $disk >>$LOGFILE 2>&1
+				return 1
+			}
+			Disk_remounted=true
+		}
+
+		BackupDev=$dev
+	else
+		ku_log "  backup dir $BCKDIR, not a mountpoint, skipping device search"
+		BackupDev=
+	fi
+	return 0
+}
+
+umount_backup_disk()
+{
+	local mountparms=
+
+	#ku_log "  ${DummyTag}sync disks ..."
+	#$DummyCmd sync
+	ku_log "  $(print_usage $BCKDIR) after backup"
+
+	$Disk_mounted && {
+		ku_log "  umount disk $BackupDev"
+		umount $BackupDev >>$LOGFILE 2>&1 && {
+			alix_led_status hdd-umounted
+		}
+	}
+	$Disk_remounted && {
+		ku_log "  remount disk on $BackupDev readonly"
+		if mount -oremount,ro $BackupDev
+		then
+			alix_led_status hdd-mounted
+		else
+			ku_log "ERR remounting disk readonly, still mounted readwrite"
+		fi
+	}
+	mountparms=$(grep "^$BackupDev " /proc/mounts | awk '{print $4}')
+	
+	pdebug "$BackupDev mountparms='$mountparms'"
+
+	case $mountparms in
+		rw*)	return 1 ;;	# disk still mounted readwrite
+		ro*)	return 0 ;;	# disk mounted redonly
+		"")	return 0 ;;	# disk not mounted
+	esac
+	return 1	# unknown mountparms
+}
+
+
+
+
+run_pre_scripts()
+{
+	local stat=0
+	local script=
+
+	$run_scripts || return 0
+
+	for script in $(ku-parts -x --nocomplain $CONFDIR/pre.d/include-*)
+	do
+		ku_log "  including PRE script $script"
+		. $script
+		ku_log "  end-incl  PRE script $script"
+	done
+	for script in $(ku-parts -x --nocomplain $CONFDIR/pre.d $CONFDIR/pre.sh)
+	do
+		case $script in
+		  */include-*) continue ;;
+		esac
+		ku_log "  executing PRE script $script"
+		$script || {
+			stat=$?
+			ku_log "  ERR $stat executing PRE script $script"
+			ku_log "  (skipping remaining PRE scripts)"
+			break
+		}
+		ku_log "  ended PRE script $script"
+	done
+	return $stat
+}
+
+
+run_post_scripts()
+{
+	local stat=0
+	local script=
+
+	$run_scripts || return 0
+
+	for script in $(ku-parts -x --nocomplain $CONFDIR/post.d/include-*)
+	do
+		ku_log "  including POST script $script"
+		. $script
+		ku_log "  end-incl  POST script $script"
+	done
+	for script in $(ku-parts -x --nocomplain $CONFDIR/post.d $CONFDIR/post.sh)
+	do
+		case $script in
+		  */include-*) continue ;;
+		esac
+		ku_log "  executing POST script $script"
+		$script || {
+			stat=$?
+			ku_log "ERROR $stat executing POST script $script"
+			ku_log "(skipping remaining scripts)"
+			break
+		}
+		ku_log "  ended POST script $script"
+	done
+	return $stat
+}
+
+
+
+check_online()
+{
+	local retry=0
+	local port=${SYS_port:-873}
+
+	while [ $retry -lt 3 ]
+	do
+		##ping -c 1 -w 2 $SYS_address >/dev/null 2>/dev/null && return 0
+		nc -w 2 $SYS_address $port </dev/null >/dev/null 2>&1 && return 0
+		retry=$(($retry + 1))
+		ku_log "  system $SYS_name ($SYS_address:$port) not responding, retry (#$retry) ..."
+		sleep 5
+	done
+	return 1
+}
+
+
+
+# lc 2013.03.28
+# - implemented retry on timeout procedure
+# - skip copy-to-cache on backup error (see tmplocalerr)
+#
+run_backup()
+{
+	local stat=0
+	local tmpretry=$(mktemp $WORKDIR/$CMD-tmp-retry-XXXXXX)
+	local tmplocalerr=$(mktemp $WORKDIR/$CMD-tmp-localerr-XXXXXX)
+	local sys=
+	local retry=0
+	local maxretries=5
+	local retry_time=120
+	local msg=
+
+	for sys in $SYSTEMS
+	do
+		# set and export system definitions
+		#
+		eval $(kubackup-getconf --export $sys)
+
+		check_online || {
+			ku_log "  system $SYS_name ($SYS_address) unreachable, skipped"
+			continue
+		}
+
+		setup_slot || continue
+
+		$use_cache && {
+			cache_to_slot || continue
+			check_online || {
+				ku_log "  system $SYS_name ($SYS_address) unreachable, skipped"
+				continue
+			}
+		}
+
+		retry=0
+
+		while :
+		do
+			:> $tmpretry
+			:> $tmplocalerr
+
+			run_copy_procedure 2>&1 | while read line
+			do
+				case "$line" in
+				    Connection*timed*out)
+					ku_log "  ($SYS_name) $line"
+					echo "1" >$tmpretry
+					;;
+				    20[0-9][0-9][0-9]*)	# log entry, strip out date and time
+					line=$(echo "$line" | sed -e 's/^................//')
+					ku_log "  ($SYS_name) $line"
+					echo "$line" | grep -q ' ERR ' && echo 1 >$tmplocalerr
+					;;
+				    ERR*)			# explicit error message
+					ku_log "  ($SYS_name) $line"
+					echo 1 >$tmplocalerr
+					;;
+				    STAT*)			# explicit stat line
+					line=$(echo "$line" | sed -e 's/^STAT //')
+					ku_log "  ($SYS_name) $line"
+					;;
+				    *)				# normal out, supposed to be present only in
+								# verbose mode, echoed 'as is'
+					echo "$line"
+					;;
+				esac
+			done
+
+			[ -s $tmplocalerr ] && echo "nomsg" >>$TMPERR 
+			[ -s $tmpretry ] || break
+
+			retry=$(expr $retry + 1)
+			[ $retry -gt $maxretries  ] && {
+				msg="system $SYS_name timeout, too many retries (>$maxretries), aborted"
+				ku_log "  $msg"
+				echo "$msg" >>$TMPERR
+				break
+			}
+			ku_log "  system $SYS_name, sleeping ... retry in $retry_time seconds"
+			sleep $retry_time
+
+			check_online || {
+				msg="system $SYS_name unreachable after retry, aborted"
+				ku_log "  $msg"
+				echo "$msg" >>$TMPERR
+				break
+			}
+			ku_log "  system $SYS_name, retry #$retry"
+		done
+
+		ku_log "  $(print_usage $BCKDIR) after sys $SYS_name"
+
+		[ -s $tmplocalerr ] || {
+			$write_cache && {
+				slot_to_cache	|| continue
+			}
+		}
+	done
+
+	[ -s $TMPERR ] && {
+		stat=1
+		cat $TMPERR | while read msg
+		do
+			[ "X$msg" != "Xnomsg" ] && ku_log "  ERR $msg"
+		done
+
+		HDERROR=$(kubackup-search-last-hderror $PID || :)
+		[ "$HDERROR" != "" ] && {
+			ku_log "  ERR hardware disk error"
+			echo "$HDERROR" | sed -e "s/^/  ($SYS_name) ERR /"
+		}
+	}
+
+	cleanup
+	return $stat
+}
+
+
+print_usage()
+{
+	# /dev/mapper/backup2  1.8T  1.7T   95G  95% /mnt/backup
+	local out=$(df -h "$1" | tail -1) || return $?
+	local msg=${2:-}
+
+	set -- $out
+	printf "disk free: %6s     usage: %6s of %6s (%s) %s" $4 $3 $2 $5 "$msg"
+}
+
+
+
+
+
+# (MAIN)
+
+trap 'echo -e "\nunexpected error $? at $LINENO\n"' ERR
+
+set -e
+set -u
+
+TMPERR=
+HDERROR=
+
+systems=
+remoteconf=
+disk=
+script=
+select_parms=
+send_mail=true
+send_error_mail=true
+run_scripts=true
+write_cache=false
+use_cache=false
+
+DummyCmd=
+DummyTag=
+
+args="$*"
+
+# must/should be defined in config file
+#
+BCKDISK=
+BCKDIR=
+LABEL=
+KUBACKUP_LANG=
+MAILCMD="mail"
+Timeout=
+
+# this needs to be exported to child commands, too
+#
+export KUBACKUP_LANG
+
+# evertying must use standard lang to run, for correct output parsing
+# user choice lang will be used only where needed
+#
+export LANG="C"
+
+
+[ -f $CfgFile ] && {
+	. $CfgFile || exit $?
+}
+REMOTECONF="$LABEL"
+
+requires_arg="option requires an argument"
+
+while [ $# != 0 ]
+do
+	case "$1" in
+	    -c|--config)	[ $# -lt 2 ] && usage "config $requires_arg"
+				CustomCfg=$2
+				CfgFile=$2
+				[ -f $CfgFile ] || {
+					CfgFile=/etc/$CMD-$2.conf
+				}
+				[ -f $CfgFile ] || {
+					echo "error: can't find config file '$2' or /etc/$CMD-$2.conf" >&2
+					exit 1
+				}
+				. $CfgFile || exit $?
+				REMOTECONF="$LABEL"
+				LASTREPORT="$WORKDIR/last-report-$CustomCfg.txt"
+				shift
+				;;
+	    -g|--group)		[ $# -lt 2 ] && usage "group $requires_arg"
+				select_parms="$select_parms -g $2"
+				shift
+				;;
+	    -p|--precedence)	[ $# -lt 2 ] && usage "precedence $requires_arg"
+				select_parms="$select_parms -p $2"
+				shift
+				;;
+	    -r|--remoteconf)	[ $# -lt 2 ] && usage "remoteconf $requires_arg"
+				REMOTECONF="$2"
+				LASTREPORT="$WORKDIR/last-report-$REMOTECONF.txt"
+				shift
+				;;
+	    -t|--timeout)	[ $# -lt 2 ] && usage "timeout $requires_arg"
+	    			Timeout="$2"
+				shift
+				;;
+	    -n|--dry-run)	F_EXEC=false; F_RUN_MIRROR=false ;;
+	    -N|--dummy-mirror)	F_EXEC=false; F_RUN_MIRROR=true; MIRROR_DRY_FLAG="-n" ;;
+	    -m|--no-mail)	send_mail=false ;;
+	    -M|--no-mail-really) send_mail=false; send_error_mail=false ;;
+	    -s|--no-scripts)	run_scripts=false ;;
+	    -C|--writecache)	write_cache=true ;;
+	    -U|--usecache)	use_cache=true ;;
+	    -v|--verbose)	VERBOSE=true ; verbose_flag="--verbose" ; send_mail=false; send_error_mail=false ;;
+	    -D|--debug)		VERBOSE=true; DEBUG=true ; debug_flag="--debug"  ;;
+	    -*|"")		usage "unknown option '$1'" ;;
+	    *)			systems="$systems $1" ;;
+	esac
+	shift
+done
+
+# sanity checks
+#
+[ "X$BCKDISK" = "X" ]	&& { echo "error: must define BCKDISK in $config" >&2; exit 1; }
+[ "X$BCKDIR" = "X" ]	&& { echo "error: must define BCKDIR in $config" >&2; exit 1; }
+[ "X$LABEL" = "X" ]	&& { echo "error: must define LABEL in $config" >&2; exit 1; }
+
+
+
+# normalize disks list (mountpoints) and emails list
+#
+BCKDISK=$(echo "$BCKDISK" | tr ',' ' ')
+EMAIL=$(echo "$EMAIL" | tr ',' ' ')
+
+[ -d $BCKDIR ] || {
+	echo "error: mountpoint directory $BCKDIR not exists, abort" >&2
+	exit 1
+}
+
+remoteconf="/etc/kubackup-$REMOTECONF.conf"
+
+# logfile setup
+#
+ku_cap_logfile
+ku_log "STARTED P$PID $CMD $args"
+ku_log "  CMDSTR='$CMDSTR'"
+ku_log "  CONFDIR='$CONFDIR'"
+ku_log "  BCKDISK='$BCKDISK'"
+ku_log "  BCKDIR='$BCKDIR'"
+ku_log "  LABEL='$LABEL'"
+ku_log "  MAILCMD='$MAILCMD'"
+ku_log "  Timeout='$Timeout'"
+ku_log "  KUBACKUP_LANG='$KUBACKUP_LANG'"
+
+$VERBOSE || exec >>$LOGFILE 2>&1
+
+$F_EXEC || {
+	DummyTag="#dry_run "
+	$F_RUN_MIRROR || DummyCmd="echo $DummyTag"
+}
+
+TMPERR=$(mktemp $WORKDIR/$CMD-tmp-err-XXXXXX)
+
+trap 'echo -e "\n*INTR*\n"; exit 255' 1 2 3
+trap 'cleanup' EXIT
+
+# needed to match loglines, for report at end; the backup can spawn on
+# two days, if running late at night; note that the logfile parsing is
+# made only on start/stop days, a backup spawning on more days is not
+# expected
+#
+DayStart=$(date '+%Y%m%d')
+DayEnd=
+DisplayStartDate=$(date '+%Y.%m.%d %H:%M')
+
+
+# aquire lock
+#
+KU_LOCKFILE="/var/lock/$CMD-$REMOTECONF.lock"
+result=$(ku_lock 2>&1) || {
+	ku_log "$result"
+	exit 1
+}
+
+
+mount_backup_disk || {
+	ku_lock_remove
+	exit 1
+}
+
+ku_log "  disk label: $LABEL"
+ku_log "  $(print_usage $BCKDIR 'before backup')"
+ku_log "  backup started on $(date '+%Y.%m.%d %H:%M:%S')"
+
+
+# build systems list, exported to pre/post scrips, too
+# errors from kubackup-systems are ignored, but reported
+#
+SYSTEMS=$(kubackup-systems --config $CfgFile $select_parms $systems 2>$TMPERR || :)
+SYSTEMS=$(echo $SYSTEMS)
+sed -e 's/^/  [kubackup-systems] warning: /' $TMPERR | ku_loglines
+:>$TMPERR
+
+GlobalStat=0
+
+if run_pre_scripts
+then
+	run_backup || GlobalStat=$?
+	run_post_scripts || GlobalStat=$?
+else
+	GlobalStat=$?
+fi
+
+
+
+# saves logfile to backup disk
+#
+savelogdir="$BCKDIR/__kubackup"
+if [ "X$CustomCfg" = "X" ]
+then
+	savelogfile="$(date '+%Y%m%d-%H%M%S').log"
+else
+	savelogfile="$(date '+%Y%m%d-%H%M%S')-$CustomCfg.log"
+fi
+[ -d "$savelogdir" ] || {
+	mkdir "$savelogdir"
+}
+# catch errors, here: backup disk maybe full
+# note: we assume that a backup cannot spawn more than 2 days
+grep " P$PID " $LOGFILE | egrep "^$DayStart|^$DayEnd" >$WORKDIR/${CMD}-tmp-log
+rm -f $WORKDIR/${CMD}-tmp-log.bz2
+bzip2 $WORKDIR/${CMD}-tmp-log
+pdebug "  ${DummyTag}copying $WORKDIR/${CMD}-tmp-log.bz2 to $savelogdir/$savelogfile.bz2"
+$F_EXEC && {
+	cp $WORKDIR/${CMD}-tmp-log.bz2 "$savelogdir/$savelogfile.bz2" || {
+		ku_log "ERROR, CANT SAVE LOG $savelogdir/$savelogfile.bz2 ON BACKUP DISK (DISK FULL?)"
+	}
+}
+
+
+
+
+msg=$(kubackup-tr $CMD remove-disk)
+
+umount_backup_disk || {
+	msg=$(kubackup-tr $CMD no-remove-disk)
+}
+
+set +e
+
+if [ $GlobalStat = 0 ]
+then
+	ku_log "ENDED OK, $msg"
+	if [ "X$CustomCfg" = "X" ]
+	then
+		msg=$(kubackup-tr $CMD ended-ok)" $msg"
+	else
+		msg=$(kubackup-tr $CMD ended-ok-c "$CustomCfg")" $msg"
+	fi
+else
+	ku_log "ENDED ERRORS! $msg"
+	if [ "X$CustomCfg" = "X" ]
+	then
+		msg=$(kubackup-tr $CMD ended-errors)" $msg"
+	else
+		msg=$(kubackup-tr $CMD ended-errors-c "$CustomCfg")" $msg"
+	fi
+fi
+
+DayEnd=$(date '+%Y%m%d')
+
+log_mail $GlobalStat "$msg"
+
+ku_lock_remove
+exit 0
+
+
+# HISTORY
+# 3.16 2024-09-26 lc
+# - fix: nc will hang when running in background from interactive shell
+#	 (added </dev/null to cmdline)
+# - del: removed 'sync' command at backup end
+#
+# 3.15 2024-09-20 lc
+# - new: started this embedded history
+# - add: system 'port' parameter, to override default remote rsync daemon port
+# - fix: quoted strings in some tests
+# - fix: cleanup, changed '==' to '=' in tests

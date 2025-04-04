@@ -1,0 +1,106 @@
+#!/bin/bash
+#
+# __copy1__
+# __copy2__
+#
+CMD=$(basename $0)
+CMDVER="3.0"
+CMDSTR="$CMD v$CMDVER (2020/08)"
+
+# NOTE: this script predates the code in 'kbackup-run' script;
+# 	to be precise, replacing the code in kubackup-run with
+#	a call to this external script is on todo list
+
+usage()
+{
+	echo "
+=== $CMDSTR == mangle (flatten) module+directory names ===
+
+this command combines a backup module name and a directory
+path, flattening to a single directory name, used as
+starting point for copies by kubackup-run script
+
+the module name should conform to the same syntax used in
+'systemname_modules' file (bck_ prefix will be stripped,
+optional flags can be used after comma, etc)
+
+usage: $CMD [--debug] module_name dir_path
+
+example:
+  $CMD users   /		becomes users_
+  $CMD bck_,LA w/ftp	becomes _w_ftp
+" >&2
+	exit 127
+}
+
+pdebug()
+{
+	$DEBUG && echo "@D" "$@" >&2 || :
+}
+
+
+# (MAIN)
+
+DEBUG=false
+
+case ${1:-} in
+  -D|--debug)	DEBUG=true; shift ;;
+  -*|"")	usage ;;
+esac
+
+[ $# != 2 ] && usage
+module=$1
+dir=$2
+flags=
+is_win=true
+
+# remove flags from module name
+#
+echo "$module" | grep -q "," && {
+	flags=$(echo $module | sed -e 's/.*,//')
+	module=$(echo $module | sed -e 's/,.*//')
+}
+
+# is windows module?
+#
+echo "$flags" | fgrep -qi 'L' && is_win=false
+
+pdebug "module='$module' dir='$dir' flags='$flags' is_win=$is_win"
+
+
+module=${module#bck_}
+pdebug "module, removed bck_ prefix: '$module'"
+
+dir=$(echo "$dir" | sed -e 's/\^/ /g')
+pdebug "dir, subst ^ with spaces: '$dir'"
+
+if [ "X$dir" = "X/" ]
+then
+	dir=$module
+else
+	dir="$module/$dir"
+fi
+pdebug "dir, combined with module: '$dir'"
+
+if [ "X$dir" = "X" ]
+then
+	dir="/"
+else
+	dir=$(echo "$dir" | sed -e 's#//#/#g' -e 's#/$##')
+fi
+pdebug "dir, normalized: '$dir'"
+
+dir=$(echo "$dir" | tr '/' '_' | tr ' ' '_')
+pdebug "dir, normalize spaces: '$dir'"
+
+# BACKWARD COMPAT FOR WINDOWS NAMES
+#
+$is_win && {
+	[ "X${KUBACKUP_MANGLEDIR_COMPATMODE:-}" = "Xtrue" ] && {
+		dir=${dir}_
+		pdebug "dir, is_win, adding underscore: '$dir'"
+	}
+}
+
+echo "$dir"
+exit 0

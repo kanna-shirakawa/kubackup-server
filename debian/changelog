@@ -1,0 +1,675 @@
+kubackup-server (3.0-ku25-03a) unstable; urgency=low
+
+  * sbin/kubackup-systems
+    - upd: minor cosmetic changes
+
+
+ -- Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>  Thu, 13 Mar 2025 10:53:31 +0100
+
+kubackup-server (3.0-ku25-02a) unstable; urgency=low
+
+  * sbin/kubackup-systems
+    - upd: minor cosmetic changes, better help message, list of alt config files
+
+ -- Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>  Sun, 09 Feb 2025 13:11:32 +0100
+
+kubackup-server (3.0-ku24-09b) unstable; urgency=low
+
+  * sbin/kubackup-run
+    - fix: nc will hang when running in background from interactive shell
+	   (added </dev/null to cmdline)
+    - add: system 'port' parameter, to override default remote rsync daemon port
+    - fix: quoted strings in some tests
+    - fix: cleanup, changed '==' to '=' in tests
+    - del: removed 'sync' command at backup end
+
+ -- Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>  Thu, 26 Sep 2024 08:35:46 +0200
+
+kubackup-server (3.0-ku24-09a) unstable; urgency=low
+
+  * sbin/kubackup-watch*
+    - add: -N (N=number) option, used to display last N lines of current logfile
+
+ -- Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>  Sat, 07 Sep 2024 22:13:03 +0200
+
+kubackup-server (3.0-ku24-08a) unstable; urgency=low
+
+  * bin/kubackup-dedup
+    - new: utility that deduplicate files using hard-link; usefull for manual "fix"
+    	   backup directory, but can be used over any tree
+
+  * sbin/kubackup-watch (and companion kubackup-watch-cmd)
+    - new: utility to live watch current backup infos
+
+ -- Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>  Thu, 15 Aug 2024 08:59:10 +0200
+
+kubackup-server (3.0-ku24-03a) unstable; urgency=low
+
+  * sbin/kubackup-run
+    - fix: quoted $SYS_rotation in various places (can be empty)
+
+ -- Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>  Tue, 19 Mar 2024 08:31:58 +0100
+
+kubackup-server (3.0-ku24-01a) unstable; urgency=low
+
+  * pre/05rename
+    - fix: "continue" instead of "return" in line 87
+
+ -- Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>  Thu, 07 Mar 2024 07:45:13 +0100
+
+kubackup-server (3.0-ku23-12a) unstable; urgency=low
+
+  * sbin/kubackup-run
+    - fix: typo at line 610 ('&&' instead of '-a' in a test)
+
+ -- Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>  Fri, 22 Dec 2023 16:53:56 +0100
+
+kubackup-server (3.0-ku23-10a) unstable; urgency=low
+
+  * sbin/kubackup-run
+    - fix: if rotations=0 doesn't uses --inplace option (was checked on $PREVDIR var,
+    	   that is defined even rotations=0)
+
+ -- Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>  Mon, 02 Oct 2023 08:50:17 +0200
+
+kubackup-server (3.0-ku23-08a) unstable; urgency=low
+
+  * debian/compat: (devuan daedalus) raised to 10
+
+ -- Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>  Mon, 28 Aug 2023 14:28:31 +0200
+
+kubackup-server (3.0-ku22-12a) unstable; urgency=low
+
+  * pre.d/10clean
+    - add: __kubackup metadata directory maintenance, logfiles cleanup; in the config
+     	   file you can add MAX_LOGFILES_AGE=<days>, and the script will clean up
+	   old logfiles based on this setting
+
+ -- Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>  Tue, 14 Mar 2023 11:51:36 +0100
+
+kubackup-server (3.0-ku22-04a) unstable; urgency=low
+
+  * pre.d/05rename
+    - mod: almost full rewritten
+
+  * jt metafiles
+    - upd: updated to 2021-10-26 version
+
+ -- Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>  Wed, 06 Apr 2022 12:53:23 +0200
+
+kubackup-server (3.0-ku22-02a) unstable; urgency=low
+
+  * sbin/kubackup-export-mktar
+    - fix: updted to reflect external packages changes; now searches binfiles
+    	   in theyr actual path (using which) instead of using fixed path
+
+ -- Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>  Wed, 23 Feb 2022 15:02:43 +0100
+
+kubackup-server (3.0-ku21-11a) unstable; urgency=low
+
+  * sbin/kubackup-getconf
+    - add: modulesfile system key, points to the file containing modules, if any;
+    	   if not defined defaults to $CONFDIR/<sys>_modules (previous beheaviour);
+	   if defined the file MUST exists; can be absolute path, or relative to
+	   $CONFDIR
+
+  * sbin/kubackup-run
+    - fix: uses kubackup-getconf when needed
+
+ -- Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>  Sat, 29 Jan 2022 12:15:22 +0100
+
+kubackup-server (3.0-ku21-06b) unstable; urgency=low
+
+  * sbin/kubackup-run
+    - fix: the mess about LANG different than C (kubackup-run was not updated
+    	   from the introduction of KUBCACKUP_LANG var)
+
+ -- Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>  Sat, 18 Sep 2021 13:05:39 +0200
+
+kubackup-server (3.0-ku21-06a) unstable; urgency=low
+
+  * sbin/kubackup-run
+    - fix: if there is only one slot, for a given system, on backup disk,
+    	   the subsequent backup will not use it, performing a full copy
+	   instead (due wrong test)
+    - mod: debug option now automatically set verbose option, too
+    - fix: in dry-run mode the main logfile will copied on backup disk for real
+    - fix: call of log_err() pseudofunc in early stage (disk mount phase) will
+    	   abort due missing $DisplayStartDate definition
+
+ -- Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>  Sat, 12 Jun 2021 09:11:05 +0200
+
+kubackup-server (3.0-ku21-05) unstable; urgency=low
+
+  * production release ku21.05
+
+ -- Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>  Mon, 17 May 2021 18:19:06 +0200
+
+kubackup-server (3.0-ku21-4a) unstable; urgency=low
+
+  * meta: package owner
+    - mod: Allblue SA dismissed, now is KUBiC Labs only
+    - mod: from now releases uses the scheme YY.mm[patchlevel], where patchlevel
+    	   usually is a locase letter; releases YY.mm (w/out patchlevel) are
+	   production ones
+
+  * sbin/kubackup-addsystems
+    - fix: typo in line 195 and below, $sys instead of $system
+
+ -- KUBiC Labs (CH) <packager@kubiclabs.com>  Wed, 21 Apr 2021 16:53:40 +0200
+
+kubackup-server (3.0-ku21-2) unstable; urgency=low
+
+  * production release 3.0 ku21.2
+
+ -- KUBiC Labs (CH) <packager@kubiclabs.com>  Wed, 24 Feb 2021 12:33:10 +0100
+
+kubackup-server (3.0-ku21-1) unstable; urgency=low
+
+  * sbin/kubackup-run
+    - mod: added exception to mirror output for locked files from windows
+    	   backups: Device or resource busy (now is ignored)
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Sat, 20 Feb 2021 15:53:08 +0100
+
+kubackup-server (3.0-ku21-0) unstable; urgency=low
+
+  * production release 3.0 ku21.0
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Wed, 20 Jan 2021 15:51:33 +0100
+
+kubackup-server (3.0-ku0-3) unstable; urgency=low
+
+  * post.d/xlocate (--config once)
+    - fix: statefile name was not using disk label when running with default
+   	   dbfile name (=disk label, XLOCATE_DBFILE env not set), causing
+	   exponential grow of the xlocate dbfile, due deleted directories
+	   records not pruned
+    - add: env override XLOCATE_MODE to set dbfile update mode, default is 'add',
+    	   you can set it to 'update' to replace entries instead of adding them
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Thu, 07 Jan 2021 16:02:29 +0100
+
+kubackup-server (3.0-ku0-2) unstable; urgency=low
+
+  * production release 3.0 ku0.2
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Sun, 16 Aug 2020 17:44:36 +0200
+
+kubackup-server (3.0-ku0-1) unstable; urgency=low
+
+  * kubackup-run
+    - fix: when error occurred in PRE script, the POST script should be
+    	   skipped, too
+    - fix: when running in dry-run mode still try to save (non-existent) mirror
+    	   logfile
+    - fix: email report will search lines in logfile using only PID, this can
+    	   select wrong lines from old backups; now consider also the starting
+	   and ending dates
+    - fix: the whole program and childs must run under LANG=C, to avoid problems
+    	   parsing outputs; custom lang from KUBACKUP_LANG env must be used only
+	   when needed
+    - mod: prints human readable start date and time in report header
+
+  * kubackup-getconf
+    - add: value checking, new exit value 11; only for rotations at the moment
+    - fix: rotations=1 really means "no retentions"; if rotations is set to 1
+    	   in config files, will be forced to 0
+
+  * pre/10clean
+    - fix: aborts when trying to remove a path that has been just removed, if
+    	   a matching glob find duplicate entries
+
+  * last report labelling
+    - mod: when using a custom config, the last report saved in workdir was
+           named using the disk label, this is not correct since different
+	   custom configs can use the same disk; now is renamed using the
+	   config name itself
+	   modified: kubackup-run and kubackup-status
+
+  * sbin/ku-duplo
+    - add: $disabled variable in config tagfiles, to disable a backups set
+    	   without the need to delete the config tagfile itself; some action
+	   can be done even if disabled (like stats, or sizes summary by the
+	   ku-duplo-sizes command); the other actions can be performend on
+	   disabled tags using the --force flag
+    - add: -c (--cfgdir) option, to change config dir
+    - add: -a (--all) option, to process all valid tagfiles
+    - add: -f (--force), to process tagfiles even they are disabled
+    - mod: improved usage messages
+
+  * sbin/ku-duplo-sizes
+    - add: -d (--disabled) to show disabled tags
+    - mod: improved error handling of ftp file retrieve
+
+  * post-once/xlocate
+    - mod: minory log messages changes
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Sun, 19 Jul 2020 15:17:41 +0200
+
+kubackup-server (3.0-ku0-0) unstable; urgency=low
+
+  * VERSION 3.0
+  * production release ku0.0
+
+  * WARNING! CONFIG FILES FORMAT CHANGED
+    - new: convert-to-v3.sh script, in docs directory, must be run on each
+    	   kubackup-run config directory
+    - mod: due the config format change, upgraded kubackup-systems,
+           kubackup-getconf, kubackup-run
+
+
+  * pre.d scripts
+    - mod: now installed by default, since does nothing if the matching config
+    	   file is not present in config dir (but see 10clean notes)
+    - mod: clean_disk renamed to 10clean; the expected config file is now
+    	   'clean.cfg'; the script will reduce backup copies if they exceed
+	   the defined number of rotations, even if the config file is not
+	   present
+    - new: 05rename, can be used to rename/move directories on disk to reflect
+    	   changes in backup strategies; the expected config file is 'rename.cfg'
+
+    examples of config files, with the detailed description of the fields
+    formats, are available in the doc directory
+
+  * kubackup-status
+    - add: new options -l|--list-configs (command: listconfigs), prints a list of
+    	   valid backup configs (see kubackup-status help for details)
+
+  * kubackup-status.cgi (under docs dir, must be installed manually)
+    - new: rewritten in perl
+    - new: now obtain the valid configs from remote system and produce reports
+    	   for all configs by default
+    - new: uses helper functions from cglib.pl (one copy provided in docs dir)
+    - new: klabs report css (one copy provided in docs dir)
+    - mod: accordlying to cgilib.pl now parms are parsed in the standard way
+    	   for GET invoked cgi-bin scripts (&parm=value,parm2=value,...)
+
+  * post-once/xlocate
+    - mod: now uses different statefile if XLOCATE_DBFILE is set
+
+  * kubackup-run, pre/clean_disk
+    - mod: logfiles saved in statedir '__kubackup' on backup disks are now
+    	   compressed, with bzip2; pre/10clean script modified to compress
+	   the previous saved logfiles
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Thu, 28 May 2020 15:39:03 +0200
+
+kubackup-server (2.0-ku20-6) unstable; urgency=low
+
+  * production release ku20.6
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Thu, 21 May 2020 11:30:03 +0200
+
+kubackup-server (2.0-ku20-5) unstable; urgency=low
+
+  * post-once.d/xlocate
+    - fix: aborts when there are no dirs to scan, due undefined content of
+    	   array variable
+    - add: env var XLOCATE_SLOTS, forces the script to scan only specified slots
+    	   instead of whole backup disk
+    - add: env var XLOCATE_IGNORE, regular expression used to remove slots from
+    	   scan list
+
+  * kubackup-tr
+    - fix: don't set default lang to 'C' if LANG or KUBACKUP_LANG env are defined
+    	   but empty
+
+  * kubackup-parseoutput
+    - fix: changed load_langfile() function accordling to fixes in kubackup-tr
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Tue, 19 May 2020 13:38:27 +0200
+
+kubackup-server (2.0-ku20-4) unstable; urgency=low
+
+  * production release ku20.4
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Sat, 04 Apr 2020 16:46:53 +0200
+
+kubackup-server (2.0-ku20-3) unstable; urgency=low
+
+  * depends (debian control file)
+    - fix: removed ku-base, added ku-file-utils
+
+  * kubackup-parseoutput
+    - fix: filesystem names with spaces will break up line parsing
+    - add: debug option (-D) and usage
+    - mod: print copy speed (b/sec) instead of status in filesystems details
+
+  * kubackup-sizes
+    - new: a new util to parse kubackup logfiles (the rsync output) and summarize
+           file counts and sizes of copied files, splitted by the first level of
+	   directory (or the n-th level passed by option)
+
+  * kubackup-run
+    - add: timeout options, passed to 'mirror' command, set globally (Timeout env
+    	   var in config file), for single system (via ${sys}_timeout config file)
+	   or on single dir in modules file (via T=timespec flag)
+	   NOTE: requires 'mirror' command >= 2.9 that acceps --timeout option,
+	   from ku-base >= 1.2-ku20.5 package
+    - add: a "__kubackup" directory will be created on each backup disk, will
+    	   contains a copy of logfiles and can be used by pre/post script to store
+	   permanent data on each run
+    - add: now logfiles are copied on backup disk on each run, every single
+    	   backup directory has the corresponding logfile with the same name
+	   with "-kubackup.log" or "-kubackup.err" extensions added (they are
+	   the same rsync output temporary stored in the workdir); a global
+	   logfile name <timestamp>.log, with lines extracted from the system-wide
+	   kubackup-run logfile relative to the current run
+    - fix: per-directory exclusions must use mangled destination directory in the
+    	   filename, but uses the original one, leading errors if the name contains
+	   spaces or slashes (filename now is $CONFDIR/${sys}_${module}${dest}_excludes,
+	   was $CONFDIR/${sys}_${module}${dir}_excludes)
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Sat, 04 Apr 2020 16:46:17 +0200
+
+kubackup-server (2.0-ku20-2) unstable; urgency=low
+
+  * production release ku20.2
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Wed, 26 Feb 2020 13:40:59 +0100
+
+kubackup-server (2.0-ku20-1) unstable; urgency=low
+
+  * kubackup-run
+    - mod: locked files errors on windows sources are now considered warnings,
+    	   not errors; the copy logfile will be saved in the work directory
+	   appending ".warn-<date>" to the name, instead of ".err-<date>";
+	   the command will exits with status = 0
+
+   * docs
+     - new: how to use LUKS crypted backup disks
+
+   * run-once dedicated configs
+     - new: the directory /etc/kubackup-once and the related config file
+     	    /etc/kubackup-run-once.conf, to store procedures that needs to
+	    run only once (pre and post), on invokation
+
+   * kubackup-status
+     - fix: if the last run of kubackup-run was aborted and the lockfile is still
+     	    around, kubackup-status will consider the task still running; fixed
+	    (note that the stale lockfile is removed)
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Sun, 23 Feb 2020 14:39:24 +0100
+
+kubackup-server (2.0-ku19-8) unstable; urgency=low
+
+  * production release ku19.8
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Sat, 28 Dec 2019 15:21:33 +0100
+
+kubackup-server (2.0-ku19-7) unstable; urgency=low
+
+  * pre.d/clean_disk
+    - fix: directories with spaces in the name are not removed
+    - fix: minor fixes (typos in messages)
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Fri, 27 Dec 2019 09:53:00 +0100
+
+kubackup-server (2.0-ku19-6) unstable; urgency=low
+
+  * production release ku19.6
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Wed, 11 Dec 2019 21:10:34 +0100
+
+kubackup-server (2.0-ku19-5) unstable; urgency=low
+
+  * kubackup-run
+    - fix: logs wrongly using last sysname "($sys)" on global error log message
+    	   at end of backups
+    - mod: improved sys reachable checks (now uses ping with small timeout, but
+    	   retrying 3 times)
+
+  * kubackup-compressdir
+    - add: many improvements, bzip/gzip choiche, logging, defaults, etc
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Mon, 09 Dec 2019 10:07:15 +0100
+
+kubackup-server (2.0-ku19-4) unstable; urgency=low
+
+  * production release ku19.4
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Sat, 10 Aug 2019 14:31:22 +0200
+
+kubackup-server (2.0-ku19-3) unstable; urgency=low
+
+  * kabackup-mangledir
+    - new: the module+dirpath mangling, extracted from kubackup-run script as
+    	   external util, so it can be used by other scripts; note that
+	   kubackup-run was not modificed, still uses interal code, replacing
+	   it with a call to kubackup-mangledir is on todo list
+
+  * pre.d/clean_disks
+    - add: at ends checks for spurious dirs presence in each system slot dir
+
+  * kubackup-run
+    - fix: rsync temp logfile was not saved on errors
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Mon, 05 Aug 2019 10:29:02 +0200
+
+kubackup-server (2.0-ku19-2) unstable; urgency=low
+
+  * production release ku19.2
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Mon, 22 Apr 2019 10:23:03 +0200
+
+kubackup-server (2.0-ku19-1) unstable; urgency=low
+
+  * sbin/kubackup-tr
+    - new: a simple perl util to manage internationalization of text strings, based
+    	   on environment $LANG variable, see /usr/lib/kubackup/lang tree;
+	   actually is used by kubackup-run, and kubackup-parseoutput internally
+	   clones the same behaviour
+
+  * sbin/kubackup-run
+    - add: --dummy-mirror (-N) option, same of -n but run mirror commands, in
+           dry mode
+    - add: email are still sent on errors, even if --no-mail option is used; a new
+    	   iption --no-mail-really (-M) is added to replicate the old beheaviour
+	   (no mail at all)
+    - fix: moved temp file $TMPERR creation after args parsing
+    - fix: minor fixes on log messages
+    - fix: sometimes mail body sent as octect-stream attachment instead real body
+           (now filters logfile lines with 'col -b' to avoid too long lines)
+
+  * pre.d/clean_disk
+    - add: now incorporate the incremental copies (rotations) reduction
+    - mod: log messages improvement
+
+  * sbin/kubackup-parseoutput
+    - add: language support, atm only two languages are supported, english (really: C)
+    	   and italian (see /usr/lib/kubackup/lang tree for details), using
+	   kubackup-tr util
+
+  * sbin/kubackup-status
+    - mod: kubackup-tr conversion
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Sat, 20 Apr 2019 14:49:27 +0200
+
+kubackup-server (2.0-ku19-0) unstable; urgency=low
+
+  * production release ku19.0
+    - new release number format (yy+seq)
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Thu, 31 Jan 2019 15:25:14 +0100
+
+kubackup-server (2.0-ku2-17) unstable; urgency=low
+
+  * various scripts
+    - fix: changed all 'cp /dev/null file' to ':> file', to avoid 1) forking
+    	   a process just to zero a file, 2) when some fu*ing wrong script
+	   DELETES AND OVERWRITE /dev/null as a plain file, a lot of nasty
+	   things happens (eg: file is not zeroed, but filled with garbage)
+
+  * ku-duplo, ku-duplo-sizes
+    - new: 'duplicity' frontend
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Thu, 17 Jan 2019 09:55:34 +0100
+
+kubackup-server (2.0-ku2-16) unstable; urgency=low
+
+  * production release ku2.16
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Sat, 25 Aug 2018 12:13:01 +0200
+
+kubackup-server (2.0-ku2-15) unstable; urgency=low
+
+  * kubackup-export-mktar
+    - fix: "while read" loop fails on end of input, causing command to abort
+    	   due the presence of '-e' flag
+
+  * mountpoint.sh
+    - new: script that emulate mountpoint command, must be used on systems
+    	   that not provide it natively (copy or rename the script as
+	   /bin/mountpoint)
+
+  * examples
+    - fix: moved config file for clean_disk pre-script in right directory
+	   ($confdir, /etc/kubackup)
+    - mod: clean_disk pre-script is not more an example, but installed by
+    	   default; it still does nothing if there is no config file in
+	   $confdir
+    - fix: removed pre-script-example.ex, de facto a duplicate of dump.ex
+    - fix: dump.ex, global variables (not up to date with kubackup-run changes),
+    	   standalone invokation parms
+
+  * bin/*
+    - del: removed commands, replaced by equivalent in ku-file-utils package:
+    	   . kubackup-storicize	replaced by ku-storicize
+	   . kubackup-compressdir replaced by ku-compressdir
+	   . kubackup-timestampdir replaced by ku-timestamp-rename
+
+  * sbin/kubackup-getconf
+    - new: util to get config values, global or per system; in the future
+    	   commands like kubackup-run will use this to retrieve config values
+	   instead of internally processing config files
+
+  * pre.d/clean_disk
+    - mod: now uses external kubackup-getconf util to read config values
+    - mod: added kubackup-run logfiles exclusions in spurious search
+    - fix: standalone settings, updated (correct inclusion of cfgfiles, exporting
+    	   env vars)
+    - mod: minor changes on messages
+
+  * lib/pre-post-common.sh
+    - new: code snipped taken from clean_disk script, must be used as common
+    	   functions/bootstrap in all pre/post scripts
+    - mod: all pre and post scripts modified to follow this new rule
+
+  * post.d/examples/dump.ex
+    - del: removed, was a duplicate of pre.d one
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Sat, 25 Aug 2018 10:32:12 +0200
+
+kubackup-server (2.0-ku2-14) unstable; urgency=low
+
+  * production release ku2.14
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Sat, 14 Apr 2018 00:14:01 +0200
+
+kubackup-server (2.0-ku2-13) unstable; urgency=low
+
+  * kubackup-run
+    - fix: should not try to search a device if the backup dir is not a mountpoint
+	   (ie: is a plain directory)
+    - mod: minor cosmetic changes
+
+  * kubackup-export-mktar
+    - new: command to build a tarfile with package content, plus a bunch of other
+    	   usefull shells scripts, for export on foreing systems (tested on
+	   synology dsm 6.x at the moment)
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Wed, 07 Mar 2018 19:34:42 +0100
+
+kubackup-server (2.0-ku2-12) unstable; urgency=low
+
+  * production release ku2.12
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Fri, 06 Oct 2017 19:45:41 +0200
+
+kubackup-server (2.0-ku2-11) unstable; urgency=low
+
+  * kubackup-run
+    - fix: error messages extraction from logfile is not restricted to rsync errors
+
+  * pre.d/clean_copies.ex
+    - add: new example script, automatically removes extra copies if you reduce
+    	   the rotations of copies for a system
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Thu, 28 Sep 2017 19:40:22 +0200
+
+kubackup-server (2.0-ku2-10) unstable; urgency=low
+
+  * production release ku2.10
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Tue, 12 Sep 2017 14:22:23 +0200
+
+kubackup-server (2.0-ku2-9) unstable; urgency=low
+
+  * kubackup-maintenance
+    - new: util for backup disks maintenance (WIP)
+
+  * kubackup-timestampdir
+    - fix: minor fixes
+
+  * kubackup-run
+    - fix: BCKDIRS doesn't works as expected, using alternate, but still valid,
+    	   mount formats (eg: LABEL=xxxx) fails
+    - fix: BCKDIR (current mountpath) used as expected, BCKDIRS not more modified
+    - fix: CONFDIR ignored from config file
+    - mod: now you can pass only "name" as config file, automatically set to
+    	   /etc/kubackup-run-$name.conf if present
+    - fix: config file was not passed as param to kubackup-systems command
+    - fix: mount -oremount doesn't more accept directory mountpoint as parameter
+    	   when multiple entries in /etc/fstab (eg: LABEL=1 and LABEL=2 that
+	   points both to /mnt/backup, mount -oremount /mnt/backup fails,
+	   at least on Devuan 1.0 jessie) -- now detects and uses raw device
+    - fix: last updates introduced a bug, the mangled target directory name for
+    	   non-root modules have a spurious trailing undescore (_)
+
+  * plugins, examples
+    - add: clean_disk and related config file clean_disk.cfg, automatically purge
+    	   extra files/dirs from backup disks, following rules from config file
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Tue, 29 Aug 2017 08:09:32 +0200
+
+kubackup-server (2.0-ku2-8) unstable; urgency=low
+
+  * production release ku2.8
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Tue, 28 Mar 2017 17:00:02 +0200
+
+kubackup-server (2.0-ku2-7) unstable; urgency=low
+
+  * kubackup-update-rsync
+    - fix: missing defaults from /etc/kubackup-run.conf
+
+  * kubackup-parseoutput
+    - fix: new rsync versions prints number with commas
+
+  * kubackup-run, example files
+    - fix: now usefull env vars are exported to pre/post scripts, lists are
+    	   properly expanded and normalized (space sep)
+    - new: env $SYSTEMS (normalized and expanded, space sep, list)
+    - new: uses config var $MAILCMD to send mails (default: mail); must accept
+    	   mail command syntax (-s subject ....)
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Sat, 25 Mar 2017 05:08:18 +0100
+
+kubackup-server (2.0-ku2-6) unstable; urgency=low
+
+  * production release ku2.6
+
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Sat, 25 Mar 2017 00:50:19 +0100
+
+kubackup-server (2.0-ku2-5) unstable; urgency=low
+
+  * sbin/kubackup-run
+    - add: 'C' flag on filesystem (module) to activate cache-previous-copy,
+    	   if rotation is enabled and a previous backup is on disk, performs
+	   a mirror on current target dir before backup run; it's effective
+	   only if a module is network bound (net speed < backup disk speed)
+    - add: 'A' flag on filesystem (module) to activate full backup instead
+    	   of clean backup; aka to include tmp/* cache/* dirs (see --backup
+ -- Allblue SA, KUBiC Labs (CH) <packager@kubiclabs.com>  Fri, 25 Mar 2016 00:41:38 +0100
+

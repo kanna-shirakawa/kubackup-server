@@ -1,0 +1,323 @@
+#!/bin/bash
+#
+# /etc/kubackup/pre.d/clean_disk
+#
+# __copy1__
+# __copy2__
+#
+# BACKUP DISKS CLEANUP (MAINTENANCE) SCRIPT
+#
+CMD=$(basename "$0")
+CMDVER="3.2"
+CMDSTR="$CMD v$CMDVER (2022-12-20)"
+
+set -e -u
+
+# get common functions and bootstrap code; will get the logging
+# library (/lib/ku-base/log.sh) too
+#
+# note that logging inherith behaviour from parent script (kubackup-run)
+# via environment exports
+#
+. /usr/lib/kubackup/pre-post-common.sh
+
+
+#------------------------------------------------------------------------------
+#
+# 1. take care to reduce (remove) incremental copies if more than
+#    declared for each system
+#
+# 2. if present, uses /etc/kubackup/clean_disk.cfg config file to select
+#    and purge directories on backup disks, before copies
+#
+# 3. checks each system dir for spurious (extra) dirs, raising a warning
+#    in the logs, so you can use this warnings to add entries into your
+#    clean_disk.cfg file; note that this works only on systems that uses
+#    explicit "module" list
+#	
+# 4. performa maintenance of __kubackup metadata directory, removing old
+#    logfiles
+#
+# clean_disk.cfg format
+# ---------------------
+#
+# each line of the config file contains these fields, separated by
+# one or more spaces or tabs, ie:
+#
+#	label_match	min_size	file_glob(s)
+#
+#	MYBACKUP[0-9]*	10000		oldsys* tempserver*
+#	MYBACKUP[0-9]*	-		slot/anothersys-[0-9]*
+#
+# - matches uses shell glob expansions
+# - all after '#' character is comment, empty lines are discarted
+# - labels are matched against LABEL_<label_match>
+# - file_glob(s) are relative to disk mountpoint
+# - min_size is in Mb, if 0 or '-' (minus) is ignored (=always true),
+#   otherwise directory purge occurs only if fress space on disk is
+#   below the min_size parameter
+#
+#
+# options in clean_disk.cfg file
+# ------------------------------
+#
+# you can set some environtment variables in this file (usually at
+# the beginning, but position really don't care, since the definitions
+# are extracted using grep:
+#
+#  MAX_LOGFILES_AGE	in days, if not set or zero means no cleanup
+#
+#------------------------------------------------------------------------------
+
+
+mysyslog()
+{
+	local sys=$1; shift
+	local msg=$(printf "%-12s %s" "($sys)" "$*")
+	mylog "$msg"
+}
+
+
+
+ls_sys_dirs()
+{
+	ls -d ${1}_20[1-9][0-9].[0-9][0-9].[0-9][0-9]-* 2>/dev/null || :
+}
+
+
+
+count_sys_copies()
+{
+	local dirs=$(ls_sys_dirs $1)
+	local actual_rotations=0
+
+	[ "X$dirs" != "X" ] && {
+		[ "$dirs" != "" ] && {
+			actual_rotations=$(echo "$dirs" | wc -l)
+		}
+	}
+	mysyslog $sys "dirs $actual_rotations/$rotations: " $dirs
+	echo $actual_rotations
+}
+
+
+print_usage()
+{
+	# /dev/mapper/backup2  1.8T  1.7T   95G  95% /mnt/backup
+	local out=$(df -h "$1" | tail -1) || return $?
+	local msg="$*"
+
+	set -- $out
+	out=$(printf "disk free: %6s     usage: %6s of %6s (%s) %s" $4 $3 $2 $5 "$msg")
+	mylog " $out"
+}
+
+
+
+
+# (MAIN)
+
+trap 'echo -e "\n$0 *INTR*\n" >&2; exit 255' 1 2 3
+trap 'echo -e "\n$0: unexpected error $? at $LINENO\n" >&2' ERR
+
+cd "$BCKDIR"
+
+# get current disk label
+label=$(ls LABEL_* 2>/dev/null) || {
+	mylog "mountpoint $BCKDIR: disk not mounted or not labeled"
+	exit 1
+}
+
+print_usage $BCKDIR "on start"
+
+
+
+# 1. CLEAN COPIES
+#
+for sys in $SYSTEMS
+do
+	rotations=$(kubackup-getconf $sys 'rotations')
+	[ "$rotations" = "0" ] && {
+		$f_standalone && mysyslog $sys "no rotations defined, skip"
+		continue
+	}
+
+	slot=$(kubackup-getconf $sys 'slot')
+	slot=${slot:-$sys}
+
+	actual_rotations=$(count_sys_copies $slot)
+	[ $actual_rotations -le $rotations ] && continue
+
+	dirs=$(ls_sys_dirs $slot)
+	remove=$(echo "$dirs" | sort -r | sed -e "1,${rotations}d")
+
+	if $F_EXEC
+	then
+		mysyslog $sys "remove" $remove
+		rm -rf $remove
+		count_sys_copies $sys
+		print_usage $BCKDIR "after cleanup slot '$slot'"
+	else
+		mysyslog $sys "(dry-run) remove" $remove
+	fi
+done
+
+
+
+# 2. ON-REQUEST CLEAN DISK
+
+cfgfile=$CONFDIR/$(echo $CMD | sed -e 's/^[0-9]*//').cfg
+
+if [ -f "$cfgfile" ]
+then
+	sed -e 's/[ ,	]*#.*//' -e '/^[ ,	]*$/d' $cfgfile \
+		| while read label_match min_free file_glob
+	do
+		[ "X$file_glob" == "" ] && {
+			mylog " warn: ignoring malformed line in '$cfgfile'"
+			mylog " line: '$line'"
+			continue
+		}
+
+		label=$(ls LABEL_$label_match 2>/dev/null) || :
+		[ "$label" == "" ] && continue
+
+		paths=$(ls -d $file_glob 2>/dev/null) || :
+		[ "$paths" == "" ] && continue
+
+		paths=$(echo "$paths" | sort -u)
+
+		mylog " label=$label, file_glob=$file_glob"
+		mylog " found:" $paths
+
+		echo "$paths" | while read filepath
+		do
+			set $(df $BCKDIR | tail -1)
+			free=$(expr $4 / 1024) || :
+			msg=" free: $free, min_free: $min_free  $filepath"
+
+			case $min_free in
+			  0|-)	mylog "$msg, forced"
+				;;
+			  *)	[ $free -gt $min_free ] && {
+					mylog "$msg, not needed"
+					continue
+				}
+				mylog "$msg, needs space"
+				;;
+			esac
+
+			if $F_EXEC
+			then
+				mylog " removing: $filepath"
+				rm -r "/mnt/backup/$filepath"
+				print_usage $BCKDIR "after '$filepath'"
+			else
+				mylog " (dry-run) removing: $filepath"
+			fi
+		done
+	done
+
+
+fi # -f $cfgfile
+
+
+# 3. CHECK SPURIOUS DIRS IN EACH SYSTEM DIR
+
+tot_spurious=0
+
+for sys in $SYSTEMS
+do
+	[ -s $CONFDIR/${sys}_modules ] || continue
+	valid_dirs=$(
+		kubackup-getconf --terse $sys "modules"  | while read module dir trash
+		do
+			dir=$(kubackup-mangledir $module $dir)
+			echo "$dir"
+		done
+	)
+	###$VERBOSE && echo "D@ valid_dirs='$valid_dirs'"
+
+	slot=$(kubackup-getconf $sys 'slot')
+	slotdirs=$(ls_sys_dirs $slot)
+	for sdir in $slotdirs
+	do
+		for dir in $(ls -d $sdir/* 2>/dev/null || :)
+		do
+			case $dir in
+			  *-kubackup.log) continue ;;
+			  *-kubackup.err) continue ;;
+			esac
+			dirname=$(basename $dir)
+			echo "$valid_dirs" | grep -q "^$dirname$" || {
+				size=$(du -ms "$dir" | sed -e 's/\s.*//')
+				tot_spurious=$(($tot_spurious + $size))
+				msg=$(printf "WARN SPURIOUS %6sM %s" "$size" "$dir")
+				mysyslog $sys "$msg"
+			}
+		done
+	done
+done
+
+[ $tot_spurious != 0 ] && {
+	mylog "CAN BE REMOVED (SPURIOUS): ${tot_spurious}Mb"
+}
+
+# 4. __kbackupd metadata directory maintanence
+#
+statedir="$BCKDIR/__kubackup"
+tag="__kubackup dir maintenance"
+MAX_LOGFILES_AGE=0
+
+[ -f "$cfgfile" ] && {
+	val=$(grep "^MAX_LOGFILES_AGE=" "$cfgfile" | tail -1 || :)
+	d="[0-9]"
+
+	[ "X$val" != "X" ] && {
+		val=$(echo "$val" | sed -e 's/MAX_LOGFILES_AGE=//' -e "s/['\"]//g" -e "s/\s\s*.*//")
+		case $val in
+		  $d|$d$d|$d$d$d|$d$d$d$d)
+		  	MAX_LOGFILES_AGE=$val
+			mylog "$tag: MAX_LOGFILES_AGE=$val"
+			;;
+		  "")	# ok
+		  	;;
+		  *)	mylog "ERROR: MAX_LOGFILES_AGE ($val) must be a number from 0 to 9999, ignored"
+			;;
+		esac
+	}
+}
+
+
+[ -d "$statedir" ] && {
+
+	cd "$statedir"
+
+	# fix old backups (compress logs)
+	#
+	files=$(ls *.log 2>/dev/null || :)
+	[ "X$files" != "X" ] && {
+		cnt=$(echo "$files" | wc -l)
+		mylog "$tag: compressing $cnt logfiles in $statedir"
+		bzip2 *.log
+		print_usage $BCKDIR "after log compressing"
+	}
+
+	[ $MAX_LOGFILES_AGE != 0 ] && {
+		files=$(find . -name "*.log.bz2" -mtime +$MAX_LOGFILES_AGE)
+		[ "X$files" != "X" ] && {
+			mylog "$tag: clean old logfiles"
+			files=$(ls *.log.bz2 2>/dev/null || :)
+			cnt=$(echo "$files" | wc -l)
+			mylog "$tag:   $cnt before cleanup"
+			$F_EXEC && find . -name "*.log.bz2" -mtime +$MAX_LOGFILES_AGE -delete
+			files=$(ls *.log.bz2 2>/dev/null || :)
+			cnt=$(echo "$files" | wc -l)
+			mylog "$tag:   $cnt after cleanup"
+			print_usage $BCKDIR "after cleanup"
+		}
+	}
+} # [ -d $statedir ]
+
+$f_standalone && echo -e "\n** $CMD exit status=0\n"
+exit 0

@@ -1,0 +1,18 @@
+title		KUBACKUP %s AL %s\n
+
+disk-title	DISCO ESTERNO:
+disk-mounted	PRESENTE, MONTATO
+disk-mnt-ro	PUO` ESSERE RIMOSSO (disco montato in sola lettura, ro)
+disk-mnt-rw	NON RIMUOVERE! (disco montato in scrittura, rw)
+disk-ready	PRONTO
+disk-wrong	DISCO SBAGLIATO!
+disk-wrong2	L'etichetta del disco dovrebbe essere %s.. non %s
+disk-unk	SCONOSCIUTO
+disk-unk2	Non e` il disco corretto, o non e` ancora stato etichettato
+disk-not	ATTENZIONE: NON PRESENTE!
+
+bck-title	BACKUP:
+bck-running	IN CORSO (PID=%s)
+bck-lastrun	NON ATTIVO
+bck-notyet	NON ANCORA EFFETTUATO?
+bck-cur-rep	ULTIME RIGHE DEL REPORT CORRENTE:\n

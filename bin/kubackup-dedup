@@ -1,0 +1,209 @@
+#!/bin/bash
+#
+# ::copy1::
+# ::copy2::
+#
+CMD=$(basename "$0")
+CMDVER="1.0"
+CMDSTR="$CMD v$CMDVER (2024-08-12)"
+
+set -e -u
+
+
+usage()
+{
+	echo "
+== $CMDSTR == dedupe directories using hard links ==
+
+usage:	$CMD [options] source_dir target_dir(s) ...
+
+options:
+  -n|--dry-run		do things or dry-run (now: $F_exec)
+  -x|--execute
+
+output options:
+  -v|--verbose		be verbose or quiet (now: \$VERBOSE=$VERBOSE)
+  -q|--quiet
+  -p|--progress		prints scanned files
+" >&2
+	exit 1
+}
+
+
+vecho()
+{
+	$VERBOSE && echo "$@"
+}
+
+print_disk_usage()
+{
+	# /dev/mapper/backup2  1.8T  1.7T   95G  95% /mnt/backup
+	local out=$(df -h "$1" | tail -1) || return $?
+	local msg=${2:-}
+	local oldifs="$IFS"
+
+	IFS="$origIFS"
+	set -- $out
+
+	printf "disk free: %6s     usage: %6s of %6s (%s) %s" $4 $3 $2 $5 "$msg"
+}
+
+
+have_same_inode()
+{
+	local inode1=$(stat -c "%i" "$1")
+	local inode2=$(stat -c "%i" "$2")
+	test $inode1 = $inode2
+}
+
+
+is_different()
+{
+	# symlinks are treated as always different
+	[ -L "$1" ] && return 0
+
+	# different attribute(s)
+	local infos="%s %a %u:%g %Y"
+	local stat1=$(stat -c "$infos" "$1")
+	local stat2=$(stat -c "$infos" "$2")
+
+	pdebug "$stat1 $1"
+	pdebug "$stat2 $2"
+	[ "$stat1" != "$stat2" ] && return 0
+
+	# last resort, different content
+	cmp "$source_dir/$file" "$dir/$file" >/dev/null 2>&1 || return 0
+
+	return 1
+}
+
+
+
+pdebug() { :; }
+
+
+
+# (MAIN)
+
+. /lib/ku-base/echo.sh
+
+VERBOSE=${VERBOSE:-true}
+DEBUG=${DEBUG:-false}
+Progress=false
+F_exec=false
+
+while [ $# != 0 ]
+do
+  case $1 in
+    -v|--verbose)	VERBOSE=true ;;
+    -p|--progress|-vv)	Progress=true ;;
+    -q|--quiet)		VERBOSE=true ;;
+    -D|--debug)		DEBUG=true ;;
+    -x|--execute)	F_exec=true ;;
+    -n|--dry-run)	F_exec=false ;;
+    -*|"")		usage ;;
+    *)			break ;;
+  esac
+  shift
+done
+
+[ $# -lt 2 ] && usage
+
+[ -d "$1" ] || {
+	echo -e "\n$CMD error: not a directory: '$1'\n"
+	exit 1
+}
+
+source_dir=$1
+
+# verbose output
+if $VERBOSE
+then
+	vecho() { echo "$@"; }
+else
+	vecho() { :; }
+	echocr() { :; }
+fi
+if $Progress
+then
+	progress() { echocr "$@"; }
+else
+	progress() { :; }
+fi
+if $DEBUG
+then
+	vecho() { echo "$@"; }
+	echocr() { echo "$@"; }
+	progress() { echo "$@"; }
+	pdebug() { echo "D#" "$@"; }
+fi
+
+
+origIFS="$IFS"
+crIFS="
+"
+source_dev=$(stat -c "%d" "$source_dir")
+
+$VERBOSE && {
+	before=$(print_disk_usage "." "BEFORE DEDUP")
+	echo -e "\n$before\n"
+}
+
+
+vecho "srcdir: $source_dir"
+for dir
+do
+	[ "$source_dir" = "$dir" ] && continue
+	[ -d "$dir" ] || continue
+	vecho "  scan: $dir"
+
+	[ $(stat -c "%d" "$dir") != $source_dev ] && {
+		echo -e "\n$CMD error: target directory is on different device! aborted\n" >&2
+		exit 1
+	}
+
+	IFS="$crIFS"
+	progress "    listing files ..."
+	for file in $(find "$dir/" -type f | sed -e "s#^$dir/##")
+	do
+		[ -f "$source_dir/$file" ] || {
+			progress "  none  $file"
+			continue
+		}
+		have_same_inode "$source_dir/$file" "$dir/$file" && {
+			progress "  <->   $file"
+			continue
+		}
+		is_different "$source_dir/$file" "$dir/$file" && {
+			progress "  diff  $file"
+			continue
+		}
+
+		progress ""
+		vecho "  DEDUP $file"
+
+		##$DEBUG && ls -l "$source_dir/$file" "$dir/$file"
+		$F_exec && {
+			ln "$source_dir/$file" "$dir/$file._k_"
+			have_same_inode "$source_dir/$file" "$dir/$file._k_" || {
+				echo "  $CMD error! hard link failed, aborting" >&2
+				exit 1
+			}
+			rm "$dir/$file"
+			mv "$dir/$file._k_" "$dir/$file"
+		}
+		##$DEBUG && ls -l "$source_dir/$file" "$dir/$file"
+		##pdebug ""
+		##exit 0
+	done
+	IFS="$origIFS"
+done
+
+progress ""
+
+$VERBOSE && {
+	after=$(print_disk_usage "." "AFTER DEDUP")
+	echo -e "\n$before\n$after\n\n"
+}
+
+exit 0

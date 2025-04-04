@@ -1,0 +1,20 @@
+title		=== KUBACKUP %s (%s) ===
+
+remove-disk	you can remove the disk now
+no-remove-disk	DISK STILL MOUNTED READWRITE, DO NOT REMOVE IT
+
+ended-ok	OK,
+ended-errors	ENDED WITH ERRORS!
+ended-ok-c	OK, [%s] 
+ended-errors-c	ENDED WITH ERRORS! [%s] 
+
+err-title1	      *********************************\n
+err-title2	         WARNING, BACKUP HAS ERRORS!\n
+
+hderr-title1	------------
+hderr-title2	 DISK ERROR
+
+hderr-msg1	 Seems the error was caused by an hardware problem from
+hderr-msg2	 the hard disk labeled: %s
+hderr-already	 This disk already have hardware errors in the past, %d times:\n%s
+hderr-crappy-hd	 WARNING! unreliable hard disk, you should replace it asap!

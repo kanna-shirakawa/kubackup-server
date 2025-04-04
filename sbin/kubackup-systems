@@ -1,0 +1,370 @@
+#!/bin/bash
+# kubackup-systems - select and list systems
+#
+# __copy1__
+# __copy2__
+#
+CMD=$(basename $0)
+CMDVER="3.2"
+CMDSTR="$CMD v$CMDVER (2025-03-13)"
+
+set -e -u
+
+VERBOSE=false
+BaseCmd="kubackup-run"
+CfgFile=/etc/$BaseCmd.conf
+
+export PATH=/root/bin:/usr/local/sbin:/usr/local/bin:/sbin:/usr/sbin:$PATH
+export CONFDIR
+
+# saves env overrides
+#
+env_confdir=${CONFDIR:-}
+
+CONFDIR="/etc/kubackup"
+
+
+usage()
+{
+	local cgfs=
+
+	echo -en "
+== $CMDSTR = lists kubackup systems ==
+
+usage: $CMD [options] [systems]
+	
+options:
+  -v|--verbose		be verbose (default: list only system names)
+  -l|--long		long list (implies --verbose)
+  -L|--full		long list + extra infos
+  -c|--config FILE	use 'FILE' instead of $CfgFile;
+  			full config path, or alt config name, expanded as
+  			/etc/$BaseCmd-FILE.conf (see alt configs below)
+
+match options:
+  -d|--disabled		select only disabled
+  -a|--all		select all (enabled & disabled)
+  -g|--group group	select only matching group (multiple allowed)
+  -n|--nogroup group	select only NOT matching group (idem)
+  -p|--precedence N	select only precedence less or equal N
+
+
+alt configs:
+  " >&2
+  	cfgs=$(ls /etc/kubackup-run-*.conf | sed -e 's/.*-run-//' -e 's/\.conf//')
+	cfgs=${cfgs:-(none)}
+	echo $cfgs >&2
+	echo -e "
+- the systems are ordered by group precedence, as they will be processed
+  by 'kubackup-run' (use -l option to see PR column for computed precedence)
+" >&2
+
+	[ $# != 0 ] && echo -e "$*\n" >&2
+	exit 1
+}
+
+
+check_match_group()
+{
+	local sys=$1
+	local grp=
+	local sysgrp=
+	local sysgroups=$(kubackup-getconf $sys groups)
+	local selected=0
+
+	[ "X$Discard_groups" != "X" ] && {
+		for sysgrp in $sysgroups
+		do
+			for grp in $Discard_groups
+			do
+				[ "X$sysgrp" == "X$grp" ] && return 1
+			done
+		done
+	}
+	[ "X$Select_groups" != "X" ] && {
+		selected=1
+		for sysgrp in $sysgroups
+		do
+			for grp in $Select_groups
+			do
+				[ "X$sysgrp" == "X$grp" ] && return 0
+			done
+		done
+	}
+
+	return $selected
+}
+
+compute_precedence()
+{
+	local sys=$1
+	local sysgrp=
+	local grp=
+	local grpprec=
+	local grpmatches=0
+	local prec=$(kubackup-getconf $sys precedence)
+	local sysgroups=$(kubackup-getconf $sys groups)
+
+
+	[ "X$prec" != "X" ] && {	# got explicit precedence
+		echo $prec
+		return 0
+	}
+
+	[ -f _groups_precedences -a "X$sysgroups" != "X" ] && {
+		prec=0
+		grpmatches=0
+		for sysgrp in $sysgroups
+		do
+			exec 9<&0 <_groups_precedences
+			while read grp grpprec
+			do
+				case $grp in
+					\#*)	continue ;;
+					"")	continue ;;
+				esac
+
+				[ $sysgrp = $grp ] && {			# group matches ..
+					prec=$(expr $prec + $grpprec)
+					grpmatches=$(expr $grpmatches + 1)
+				}
+			done
+			exec 0<&9 9<&-
+		done
+		[ $grpmatches != 0 ] && {
+			expr $prec / $grpmatches	# returns matches media
+			return 0
+		}
+	}
+
+	echo $default_prec		# last resort
+	return 0
+}
+
+
+# (MAIN)
+
+trap 'echo -e "\nunexpected error $? at $LINENO\n" >&2' ERR
+
+systems=
+Select_groups=
+Discard_groups=
+prec_limit=
+f_all=false
+f_disabled=false
+default_prec=50
+list="normal"
+
+[ -f $CfgFile ] && {
+	. $CfgFile || exit $?
+}
+
+while [ $# != 0 ]
+do
+	case "$1" in
+		-v|--verbose)	VERBOSE=true ;;
+		-l|--long)	list="long"; VERBOSE=true ;;
+		-L|--full)	list="extra"; VERBOSE=true ;;
+	    	-c|--config)	[ $# -lt 2 ] && usage
+				CfgFile=$2
+				[ -f $CfgFile ] || { CfgFile=/etc/$BaseCmd-$2.conf; }
+				[ -f $CfgFile ] || {
+					echo "error: can't find config file '$2' or /etc/$BaseCmd-$2.conf" >&2
+					exit 1
+				}
+				. $CfgFile || exit $?
+				shift
+				;;
+		-g|--group)
+				[ $# -lt 2 ] && usage
+				Select_groups="$Select_groups $2"
+				shift
+				;;
+		-n|--nogroup)
+				[ $# -lt 2 ] && usage
+				Discard_groups="$Discard_groups $2"
+				shift
+				;;
+		-p|--precedence)
+				[ $# -lt 2 ] && usage
+				prec_limit=$2
+				shift
+				;;
+		-a|--all)	f_all=true ;;
+		-d|--disabled)	f_disabled=true ;;
+		-*|"")		usage ;;
+		*)		systems="$systems '$1'" ;;
+	esac
+	shift
+done
+
+# apply env overrides
+#
+[ "X$env_confdir" != "X" ] && CONFDIR=$env_confdir
+
+
+# sanity checks
+#
+[ "$CONFDIR" = "" ]	&& { echo "error: must define CONFDIR in $CfgFile" >&2; exit 1; }
+[ -d $CONFDIR ] || {
+	echo "confdir $CONFDIR not found" >&2
+	exit 1
+}
+cd $CONFDIR
+
+
+# all systems if not requested by args
+#
+if [ "X$systems" = "X" ]
+then
+	systems=$(ls *.conf 2>/dev/null | sed -e 's/\.conf//')
+else
+	newlist=
+	for sys in $systems
+	do
+		sys=$(echo $sys | sed -e "s/'//g")	# wut?
+
+		out=$(kubackup-getconf $sys uuid 2>&1) || {
+			echo "  skipped, $out" >&2
+			continue
+		}
+		newlist="$newlist $sys"
+	done
+	systems="$newlist"
+fi
+
+
+# matches groups?
+#
+newlist=
+for sys in $systems
+do
+	check_match_group $sys	&& newlist="$newlist $sys"
+done
+systems=$newlist
+
+
+# only enabled/disabled?
+#
+$f_all || {
+	newlist=
+	for sys in $systems
+	do
+		if kubackup-getconf --bool $sys disabled
+		then
+			$f_disabled && newlist="$newlist $sys"	# only disabled
+		else
+			$f_disabled || newlist="$newlist $sys"	# only enabled
+		fi
+	done
+	systems=$newlist
+}
+
+
+# precedence limit?
+#
+[ "$prec_limit" != "" ] && {
+	newlist=
+	for sys in $systems
+	do
+		precedence=$(compute_precedence $sys)
+		[ $precedence -le $prec_limit ] && newlist="$newlist $sys"
+	done
+	systems=$newlist
+}
+
+
+
+$VERBOSE && {
+	line="----------------------------------------------------------------------------------"
+	echo
+	case $list in
+	  long)
+		fmt="%02d %-28s %-1.1s %-1.1s %2d %-24s %-18s %-18s\n"
+		fmt_h="%-2.2s %-28.28s %-1.1s %-1.1s %-2.2s %-24.24s %-18.18s %-18.18s\n"
+		printf "$fmt_h" "PR" "SYSTEM" "D" "C" "RT" "GROUPS" "SLOT" "ALLOW/MODULES"
+		printf "$fmt_h" "$line" "$line" "$line" "$line" "$line" "$line" "$line" "$line"
+		;;
+	  extra)
+		fmt="%02d %-24s %-1.1s %-1.1s %2d %36s %-16s %-16s %-18s\n"
+		fmt_h="%-2.2s %-24.24s %-1.1s %-1.1s %-2.2s %-36.36s %-16.16s %-16.16s %-18.18s\n"
+		printf "$fmt_h" "PR" "SYSTEM" "D" "C" "RT" "UUID" "GROUPS" "SLOT" "ALLOW/MODULES"
+		printf "$fmt_h" "$line" "$line" "$line" "$line" "$line" "$line" "$line" "$line" "$line"
+		;;
+	  *)
+		fmt="%-20.20s %-1.1s %-20s %-20s %-20s\n"
+		fmt_h="%-20.20s %-1.1s %-20.20s %-20.20s %-20.20s\n"
+		printf "$fmt_h" "SYSTEM" "D" "GROUPS" "SLOT" "ALLOW/MODULES"
+		printf "$fmt_h" "$line" "$line" "$line" "$line" "$line"
+		;;
+	esac
+}
+
+
+temp=$(mktemp /tmp/${CMD}-XXXXXXXX)
+trap "rm -f $temp ; exit 255" 1 2 3
+
+cd $CONFDIR
+
+# collect sys names and sort by precedence
+#
+for sys in $systems
+do
+	precedence=$(compute_precedence $sys)
+	echo "$precedence $sys" >>$temp
+done
+
+# show system names / infos
+#
+for sys in $(sort -g $temp | sed -e 's/.* //')
+do
+	$VERBOSE || {	# compact list
+		echo $sys
+		continue
+	}
+	eval $(kubackup-getconf --export $sys)
+
+	is_disabled='D'
+	use_cache=
+	allow=$SYS_allow
+	precedence=$(compute_precedence $sys)
+
+	kubackup-getconf --bool $sys disabled	|| is_disabled=
+	[ "X$SYS_cache" != "X" ]		&& use_cache='C'
+
+	[ "X$SYS_modulesfile" != "X" ] && allow=$(basename "$SYS_modulesfile")
+
+	case $list in
+	  long)
+		printf "$fmt" "$precedence" "$sys" "$is_disabled" "$use_cache" \
+			"$SYS_rotations" "$SYS_groups" "$SYS_slot" "$allow"
+		;;
+	  extra)
+		printf "$fmt" "$precedence" "$sys" "$is_disabled" "$use_cache" \
+			"$SYS_rotations" "$SYS_uuid" "$SYS_groups" "$SYS_slot" "$allow"
+		;;
+	  *)
+		printf "$fmt" "$sys" "$is_disabled" "$SYS_groups" "$SYS_slot" "$allow"
+		;;
+	esac
+done
+
+$VERBOSE && {
+	case $list in
+	  long)
+		printf "$fmt_h" "$line" "$line" "$line" "$line" "$line" "$line" "$line" "$line"
+		echo -e "\nPR=Precedence D=Disabled C=Cache RT=Rotations\n"
+		;;
+	  extra)
+		printf "$fmt_h" "$line" "$line" "$line" "$line" "$line" "$line" "$line" "$line" "$line"
+		echo -e "\nPR=Precedence D=Disabled C=Cache RT=Rotations\n"
+		;;
+	  *)
+		printf "$fmt_h" "$line" "$line" "$line" "$line" "$line\n"
+		echo -e "\nPR=Precedence D=Disabled"
+		;;
+	esac
+}
+
+rm -f $temp
+exit 0

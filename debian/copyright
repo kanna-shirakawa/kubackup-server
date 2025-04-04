@@ -1,0 +1,10 @@
+COPYRIGHT INFOS
+
+  The KUBACKUP toolkit, splitted in two packages kubackup-server and
+  kubackup-client, is an original work from Lorenzo Canovi
+  <lorenzo@kubiclabs.com>.
+
+  (c) 2014 Allblue SA, KUBiC Labs (IT Department) <packager@kubiclabs.com>
+  (c) 2003-2013 Lorenzo Canovi <lorenzo@kubiclabs.com>
+
+  Licensed under GPL v.2, see /usr/share/common-licenses/GPL

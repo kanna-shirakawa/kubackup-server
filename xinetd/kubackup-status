@@ -1,0 +1,18 @@
+# __copy1__
+# __copy2__
+#
+# default: off
+# description: kubackup-status (network backup to hd using rsync)
+#
+service kubackup-status
+{
+	disable		= no
+	type            = UNLISTED
+	port            = 19003
+	socket_type     = stream
+	wait            = no
+	user            = root
+	server          = /usr/sbin/kubackup-status
+	server_args	= --interactive
+	log_on_failure  += USERID
+}

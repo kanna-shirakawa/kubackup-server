@@ -1,0 +1,18 @@
+title		KUBACKUP %s @ %s\n
+
+disk-title	EXTERNAL DISK:
+disk-mounted	PRESENT, MOUNTED
+disk-mnt-ro	CAN BE REMOVED (mounted readonly, ro)
+disk-mnt-rw	CANNOT BE REMOVED! (mounted read-write, rw)
+disk-ready	READY
+disk-wrong	WRONG DISK!
+disk-wrong2	The disk label should be %s..., not %s
+disk-unk	UNKNOWN
+disk-unk2	Wrong disk, or disk not yet labeled
+disk-not	WARNING: NOT PRESENT!
+
+bck-title	BACKUP:
+bck-running	RUNNING (PID=%s)
+bck-lastrun	NOT RUNNING
+bck-notyet	NOT YET DONE?
+bck-cur-rep	LAST LINES OF CURRENT REPORT:\n

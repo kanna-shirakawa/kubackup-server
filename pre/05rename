@@ -1,0 +1,196 @@
+#!/bin/bash
+#
+CMD=$(basename "$0")
+CMDVER="3.4"
+CMDSTR="$CMD v$CMDVER (2024-01-24)"
+
+set -e -u
+
+mylog()
+{
+        ku_log "    [$CMD] $*"
+}
+
+
+
+system_rename()
+{
+	local sys=$1
+	local to=$2
+	local found=
+	local dir=
+	local new=
+	local dangling_symlink=true
+
+	found=$(ls -d ${sys}_* 2>/dev/null || :)
+
+	[ "X$found" = "X" ] && {
+		found=$(ls -d $sys 2>/dev/null || :)
+		dangling_symlink=false
+	}
+
+	[ "X$found" = "X" ] && {
+		$f_standalone && mylog "($sys) none found"
+		return 0
+	}
+
+	$dangling_symlink && {
+		[ -L $sys ] && {
+			$F_EXEC && rm -f $sys
+			mylog "($sys) removed dir symlink"
+		}
+	}
+
+	for dir in $found
+	do
+		new=$(echo $dir | sed -e "s#$sys#$to#")
+
+		[ -d $new ] && {
+			mylog "($sys) $dir: WARN skip, dest dir '$new' already exists"
+			continue
+		}
+		slotbase=$(dirname $new)
+		[ -d $slotbase ] || {
+			$F_EXEC && mkdir -p $slotbase
+			mylog "($sys) $dir: created slotdir '$slotbase'"
+		}
+		$F_EXEC && {
+			mv $dir $new
+		}
+		mylog "($sys) $dir: moved to $new"
+	done
+	return 0
+}
+
+
+
+dir_rename()
+{
+	local sys=$1
+	local from=$2
+	local to=$3
+	local found=
+	local fname=
+	local new=
+	local check_empty=
+
+	$f_standalone && { echo; mylog "($sys) from='$from' to='$to'"; }
+
+	found=$(ls -d ${sys}_*/$from ${sys}_*/${from}-kubackup.{log,err} 2>/dev/null || :)
+
+	[ "X$found" = "X" ] && {
+		found=$(ls -d $sys/$from $sys/${from}-kubackup.{log,err} 2>/dev/null || :)
+	}
+
+	[ "X$found" = "X" ] && {
+		$f_standalone && mylog "($sys) from '$from', none found"
+		return 0
+	}
+
+
+	for fname in $found
+	do
+		new=$(echo $fname | sed -e "s#$from#$to#")
+
+		$f_standalone && { mylog "($sys) $fname: try move  -> $new"; }
+
+		if [ -f "$fname" ]
+		then
+		  	case $(basename "$new") in
+		    	  _*)
+				if [ -e "$new" ]
+				then
+		    	  		$F_EXEC && { rm "$fname"; }
+					mylog "($sys) $fname: WARN removed $new"
+				else
+		    	  		$F_EXEC && { mv "$fname" "$fname"; }
+					mylog "($sys) $fname: renamed   -> $new"
+				fi
+			  	;;
+		    	  *)	$F_EXEC && { rm "$fname"; }
+				mylog "($sys) $fname: removed"
+				;;
+		   	esac
+		else
+			check_empty=$(ls -d "$fname"/* 2>/dev/null || :)
+			[ "X$check_empty" = "X" ] && {
+				$f_standalone && { mylog "($sys) $fname: SKIP (empty placeholder)"; }
+				continue
+			}
+
+			[ -e "$new" ] && {
+				check_empty=$(ls -d "$new"/* 2>/dev/null || :)
+				if [ "X$check_empty" = "X" ]
+				then
+					mylog "($sys) $fname: remove empty $new"
+					$F_EXEC && { rmdir "$new"; }
+				else
+					mylog "($sys) $fname: SKIP exists  $new"
+					continue
+				fi
+			}
+			$F_EXEC && { mv "$fname" "$new"; }
+			mylog "($sys) $fname: renamed   -> $new"
+		fi
+	done
+	return 0
+}
+
+
+
+
+
+# (MAIN)
+
+# get common functions and bootstrap code; will get the logging
+# library (/lib/ku-base/log.sh) too
+#
+# note that logging inherith behaviour from parent script (kubackup-run)
+# via environment exports
+#
+. /usr/lib/kubackup/pre-post-common.sh
+
+trap 'echo -e "\n$0 *INTR*\n" >&2; exit 255' 1 2 3
+trap 'echo -e "\n$0: unexpected error $? at $LINENO\n" >&2' ERR
+
+# cfgfile lines formats:
+#
+# 3 parms, renaming directories for specific systems
+#
+# 	sys  from_dir  to_dir
+#
+# 2 parms, rename systems (ie: to rename a system or change slot)
+#
+#	sys to_sys
+#
+cd "$BCKDIR"
+
+cfgfile=$CONFDIR/$(echo $CMD | sed -e 's/^[0-9]*//').cfg
+
+[ -f "$cfgfile" ] || {
+	$f_standalone && mylog "config file $cfgfile not found, no actions"
+	exit 0
+}
+
+
+sed -e 's/[ ,	]*#.*//' -e '/^[ ,	]*$/d' $cfgfile \
+	| while read sys from to
+do
+	[ "X$sys" = "X" ]	&& continue
+	[ "X$from" = "X" ]	&& continue
+
+	if [ "X$to" = "X" ]
+	then
+		system_rename $sys $from
+	else
+		dir_rename $sys $from $to
+	fi
+done
+
+
+# you must exit with proper errorcode
+#
+# a non-zero exit status will prevent subsequent pre-scripts and backup
+# stage to be executed, but NOT post-scripts (they are always executed)
+#
+exit 0

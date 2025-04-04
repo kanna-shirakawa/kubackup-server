@@ -1,0 +1,12 @@
+/var/log/messages:
+
+Oct 27 05:28:54 srvbck kernel: [6180221.518130] sd 47:0:0:0: [sda] Unhandled error code
+Oct 27 05:28:54 srvbck kernel: [6180221.518157] sd 47:0:0:0: [sda]  Result: hostbyte=0x01 driverbyte=0x00
+Oct 27 05:28:54 srvbck kernel: [6180221.518188] sd 47:0:0:0: [sda] CDB: cdb[0]=0x2a: 2a 00 23 3b 47 af 00 00 f0 00
+Oct 27 05:28:54 srvbck kernel: [6180221.518263] end_request: I/O error, dev sda, sector 591087535
+Oct 27 05:28:54 srvbck kernel: [6180221.536076] Buffer I/O error on device sda1, logical block 73885934
+
+
+
+
+

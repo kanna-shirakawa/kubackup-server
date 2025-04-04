@@ -1,0 +1,45 @@
+KUBACKUP-SERVER - CONVERSION FROM V2 TO V3
+==========================================
+
+in version 3 the format of config files is changed, I have dropped
+the ugly one-file-one-var format to adopt a classic format
+
+each system has now a single config file, named <sys>.conf
+
+the file is a shell snippet, the variables are defined almost
+verbatim from the single files of v2, ie:
+
+	uuid='65a09afb-9620-4304-95e6-c052e33a3a5b'
+	address='myserver'
+	allow='10.10.0.250'
+	groups='local srv'
+	rotations='3'
+	#slot=
+	#precedence=
+
+the .conf files will not be included as-is in the other scripts, but
+read by a single command, kubackup-getconf, that will take care of
+sanity checks, settings defaults, and so on
+
+
+CONVERSION
+----------
+in the doc directory there is the conversion script, called
+convert-to-v3.sh
+
+you need to run this script in each kubackup-server directory, starting
+from the default one (/etc/kubackup) and any other you may optionally have
+configured
+
+the script reads the <sys>_* files and write down a single <sys>.conf file,
+the old format files will be removed; only a couple of files will be left
+untouched:
+
+	<sys>_modules	because have it's own format and cannot be
+			easily translate in a single variabale defition
+
+	<sys>_disabled	because is a flag file, and is convenient to left
+			it as-is
+
+before converting the script will make a backup of the whole directory
+

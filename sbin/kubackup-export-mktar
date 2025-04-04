@@ -1,0 +1,127 @@
+#!/bin/bash
+#
+CMD=$(basename $0)
+CMDVER="1.4"
+CMDSIG="$CMD v$CMDVER (2022-02-23)"
+
+set -e -u
+
+usage()
+{
+	echo "
+=== $CMDSIG == build tarfile with kubackup-server package files ===
+
+usage: $CMD
+" >&2
+	exit 1
+}
+
+
+# (MAIN)
+
+[ $# != 0 ] && usage
+
+tmpdir="/tmp/$CMD"
+fmt="  %-30s %-30s ... "
+
+rm -rf $tmpdir
+mkdir $tmpdir
+:>$tmpdir/flist
+
+for pkg in kubackup-server
+do
+	printf "$fmt" "copying pkg files from" $pkg
+	dpkg -L $pkg | fgrep -v '.diverted' | while :
+	do
+		read file || exit 0
+		[ -f "$file" ] && echo "$file"
+	done >>$tmpdir/flist
+done
+cpio -pdum $tmpdir/ <$tmpdir/flist
+rm -f $tmpdir/flist
+
+for file in /usr/share /etc/kubackup-run.conf /etc/cron.d/kubackup-server
+do
+	[ -f $tmpdir$file ] || continue
+	printf "$fmt" " (ignoring)" "$file"
+	rm -rf $tmpdir$file
+	echo "ok"
+done
+
+
+echo
+more="true"
+
+while $more
+do
+	more=false
+	files=$(cd $tmpdir ; find * -type f | sed -e 's#^#/#')
+
+	for file in $(dpkg -L ku-base)
+	do
+		[ -f $file ] || continue
+		[ -f $tmpdir$file ] && continue
+		case $file in
+		  */copyright) continue ;;
+		esac
+
+		found=$(fgrep "$file" $files) || :
+		[ "X$found" = "X" ] && {
+			base=$(basename $file)
+			found=$(egrep "^\s*$base|\s$base\s|\s$base$|[(\`]$base\s" $files) || :
+		}
+		[ "X$found" = "X" ] && continue
+
+		printf "$fmt" "adding ku-base file" $file
+		echo $file | cpio -pdum $tmpdir/
+		more=true
+	done
+done
+
+
+binextra="
+	kupurge
+	dug
+	oldest
+	ddtime
+	ku-genpasswd
+	ku-reset-tardate
+	ku-dusage
+	ku-mail
+"
+for file in $binextra
+do
+	fpath=$(which $file)
+	[ "X$fpath" = "X" ] && {
+		echo "can't find bin extra file: $file" >&2
+		exit 1
+	}
+	[ -f $tmpdir$fpath ] && continue
+	printf "$fmt" "adding extra binfile" $fpath
+	echo $fpath | cpio -pdum $tmpdir/
+done
+
+extrafiles="
+	/etc/xinetd.d/rsync
+"
+for file in $extrafiles
+do
+	[ -f $tmpdir$file ] && continue
+	printf "$fmt" "adding extra file" $file
+	echo $file | cpio -pdum $tmpdir/
+done
+
+
+
+echo
+tarfile="/tmp/kubackup-server.tar.gz"
+
+printf "$fmt" "creating tarfile" $tarfile
+cd $tmpdir
+tar cfz $tarfile $(find * -type f)
+echo "done"
+
+cd
+rm -rf $tmpdir
+echo
+exit 0

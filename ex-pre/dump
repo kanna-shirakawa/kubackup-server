@@ -1,0 +1,79 @@
+#!/bin/bash
+#
+# __copy1__
+# __copy2__
+#
+# example PRE script for kubackup-run
+#
+# this script will be executed (not included), so you must
+# end with a proper "exit" statement and a proper exit status
+#
+# copy this template to a suitable name, and made it executable
+# (chmod +x scriptname); DON'T MODIFY this example, it will be
+# overwritten on future package updates
+#
+CMD=$(basename "$0")
+CMDVER="1.0"
+CMDSTR="$CMD v$CMDVER (2020/03)"
+
+# abort on errors and on varnames typos
+#
+set -e -u
+
+# get common functions and bootstrap code; will get the logging
+# library (/lib/ku-base/log.sh) too
+#
+# note that logging inherith behaviour from parent script (kubackup-run)
+# via environment exports
+#
+. /usr/lib/kubackup/pre-post-common.sh
+
+# example code
+#
+# you have access to some environment vars about the running backup:
+#
+#  $SYSTEMS	list of backed up systems
+#  $F_EXEC	true/false, on behalf of --dry-run option
+#  $CONFDIR	config directory full path (eg: /etc/kubackup)
+#
+#  $BCKDIRS	list of possible backup mountpoint paths
+#  $CURDIR	current mountpoint full path
+#
+#  $LABEL	backup label (base string)
+#  $CURLABEL	current label
+#
+#  $EMAIL	optional email list recipients (space sep)
+#  $MAILCMD	command used to send emails
+#  $REMOTECONF	remote config file label
+#
+$f_standalone && mylog "NOTICE: running in standalone mode, config=$CfgFile"
+mylog "this is the example PRE script $0 (F_EXEC=$F_EXEC)"
+
+mylog ""
+mylog "command-line vars:"
+mylog "  CfgFile:        '${CfgFile:-}'"
+mylog "  F_EXEC:         '${F_EXEC:-}'"
+mylog "  REMOTECONF:     '${REMOTECONF:-}'"
+mylog "  SYSTEMS:        '${SYSTEMS:-}'"
+mylog ""
+mylog "config vars:"
+mylog "  LABEL:          '${LABEL:-}'"
+mylog "  CONFDIR:        '${CONFDIR:-}'"
+mylog "  BCKDISK:        '${BCKDISK:-}'"
+mylog "  BCKDIR:         '${BCKDIR:-}'"
+mylog "  EMAIL:          '${EMAIL:-}'"
+mylog "  MAILCMD:        '${MAILCMD:-}'"
+mylog ""
+mylog "runtime vars:"
+mylog "  BackupDev:      '${BackupDev:-}'"
+mylog "  Disk_found:     '${Disk_found:-}'"
+mylog "  Disk_mounted:   '${Disk_mounted:-}'"
+mylog "  Disk_remounted: '${Disk_remounted:-}'"
+mylog ""
+
+# you must exit with proper errorcode
+#
+# a non-zero exit status will prevent subsequent pre-scripts and backup
+# stage to be executed, but NOT post-scripts (they are always executed)
+#
+exit 0

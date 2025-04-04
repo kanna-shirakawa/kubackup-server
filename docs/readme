@@ -1,0 +1,226 @@
+network backup su hardisk (usando rsync), lato server
+
+... documentazione: work in progress  ...
+
+== comandi principali ==
+
+ * kubackup-systems: elenca i sistemi sottoposti a backup (clients),
+ accetta anche wildcards (es: 'srv*', attenzione a usare le
+ virgolette); senza opzioni elenca i sistemi, con opzione -v
+ fornisce info principali, con opzione -l anche info estese; con
+ opzione -a mostra anche i client definiti ma disattivati;
+ l'elenco e` in ordine di precedenza (vedi dopo)
+
+ * kubackup-addsystem: aggiunge uno o piu` sistemi all'elenco dei
+ client al quale viene assegnato un UUID creato al volo (o usato
+ quello esistente se gia` presente), in pratica crea il file
+ NOME_uuid nella directory /etc/klbackp.d; accetta alcune
+ opzioni che permettono di impostare le info del client, quindi
+ il comando puo` essere usato anche per aggiornare la definizione
+ di un client gia` esistente:
+
+  * --strict esegue bind dell'address del client allo slot (crea
+  o aggiorna il file NOME_allow); notare che l'ip address viene
+  ricavato tramite una chiamata al dns, quindi se questo per
+  qualsiasi motivo non restituisce un ip valido, il comando
+  abortisce; e` sempre possibile aggiungere manualmente questa info
+  nel file NOME_allow; allo stesso modo, per rimuovere questa
+  opzione, occorre rimuovere manualmente il file
+
+  * --group GRP aggiunge il client come membro del gruppo GRP,
+  l'opzione puo` essere ripetuta se si vogliono specificare piu`
+  gruppi, questi andranno ad aggiungersi a quelli eventualmente
+  gia` definiti in precedenza, per azzera l'elenco dei gruppi
+  di un client occorre quindi rimuovere il file NOME_groups; la
+  definizione dei gruppi e` utile perche` permette di lanciare,
+  se occorre, un backup solo per uno o piu` gruppi specifici, una
+  tipica suddivisione e` quella di distinguere server e workstations,
+  macchine locali e macchine remote, ecc; il gruppo inoltre,
+  tramite la definizione indicata nel file opzionale
+  _groups_precedences, puo` indicare la precedenza del sistema,
+  cioe` quali sistemi sono eseguiti prima e quali dopo
+
+  * --slot SLOT definisce lo slot (subdir) nel disco di backup
+  dove stoccare il backup di questo client, se non specificato
+  e` uguale al nome del client; un esempio pratico di utilizzo
+  di questa opzione: ho in gestione il backup (anche parziale)
+  delle macchine di alcuni clienti, quindi mi torna comodo avere
+  nel disco di backup una directory assegnata al cliente, e
+  sotto le relative macchine
+
+ * kubackup-run esegue il lancio dei backup sui client, tenendo
+ conto dei parametri di selezione, delle precedenze, ecc.;
+ esegue anche le operazioni preliminari e successive, come
+ identificare ed eventualmente montare il disco di backup, inviare
+ le email di report, ecc; il comando e` fatto per lavore da cron,
+ quindi non emette output, ma scrive su /var/log/kubackup-run.log;
+ se lanciato con l'opzione -v (verbose) non scrive sul log, ma
+ su schermo, e non invia le email al termine, quindi puo` essere
+ usato per lanciare manualmente un backup, ad esempio per
+ prova su un singolo sistema; l'elenco dei client viene fornito
+ dal comando kubackup-systems, quindi anche kubackup-run accetta
+ come parametri di selezione gli stessi del comando kubackup-systems
+ (si possono quindi lanciare backup su singoli o liste parziali
+ di sistemi, su gruppi, su wildcars, ecc)
+
+== direct backup ==
+
+E` possibile lanciare un backup in modo diretto (pull), al contrario
+del comportamento normale che e` quello di chiedere al client di
+iniziare il backup (push).
+
+Questa possibilita` e` utile nel caso non sia possibile installare
+sul sistema remoto il software client, ad esempio perche` la
+macchina non ha linux ma windows.
+
+In questo caso e` possibile installare sul client il solo software
+rsync (per windows usare DeltaCopy, porting di rsync+cygwin).
+Sul client occorre quindi definire uno o piu` moduli, con relativi
+dati di autenticazione (utente/password), e sul server occorre
+creare un file NOME_modules, che contiene l'elenco dei moduli
+da copiare (vedi file di esempio name_modules.ex).
+
+In presenza del file NOME_modules kubackup-run passa automaticamente
+dalla modalita` normale a quella pull.
+
+Questa modalita` e` da usare solo in caso di necessita`, perche`
+ha un livello di sicurezza minore di quello normale.
+
+
+== (DRAFT) ==
+
+ * usa mirror (frontend per rysnc)
+
+ * directory /etc/kubackup.d: contiene le definizioni dei client
+ sotto forma di singoli files con NOME_VAR, dove NOME e` il nome
+ del client (hostname, anche fqdn), e VAR e` la variabilie di
+ configurazione; ho scelto di usare questo sistema invece di avere
+ un file per ogni client (con dentro le variabili) perche` questo
+ agevola parecchio la gestione batch di queste informazioni
+
+ * per ogni client i files utilizzabili sotto /etc/kubackup.d sono
+ descritti sotto, l'unico obbligatorio e` _uuid, gli altri sono
+ tutti opzionali:
+
+  * NOME_uuid UUID del client
+
+  * NOME_slot slot di destinazione (subdir della dir di backup),
+  default=NOME
+
+  * NOME_allow ip address del client, se specificato lo slot di
+  backup accettera` connessioni solo da questo ip, default=nessuno
+
+  * NOME_groups elenco gruppi a cui appartiene il client
+
+  * NOME_rotations numero di copie (versioni) dello slot di backup
+  da tenere online su ciascun media, default=1
+
+  * NOME_precedence indica il valore di precedenza del client,
+  da 1 a 99, valore basso indica che il sistema viene prima
+  di altri (e` un valore di sort), default=50;
+  l'elenco dei sistemi (e quindi la sequenza con la quale sono
+  eseguiti i backup) tiene conto di queste precedenze, in modo
+  che sia possibile indicare quali sono i backup piu` importanti;
+  se non indicata esplicitamente, la precedenza puo` essere
+  ricavata dal gruppo, nel caso il client appartenga a piu`
+  gruppi, vale sempre il valore piu` basso
+
+  * NOME_disabled se presente, il backup per questo client e`
+  disabilitato, utile per sospendere un client senza cancellare
+  tutte le info relative
+
+  * NOME_timeout, imposta il timeout di esecuzione per il client
+  indicato, in secondi (default: 3600)
+
+ * kubackup usa config file /etc/kubackup-NOME.conf per
+ sapere che server usare, quale dir o slot remota, le directories
+ da copiare ed eventuali esclusioni, NOME e` il nome assegnato
+ al set di backup, se non definito usa "rbackup"
+
+ * per ciascuna directory e` possbile elencare esclusioni specifiche
+ usando la notazione directory,--exclude=XXX,--exclude=YYY (il
+ formato delle esclusioni e` quello di rsync)
+
+ * kubackup viene lanciato da kubackup-net, un frontend che
+ viene attivato tramite xinetd: una volta lanciato aspetta un semplice
+ comando come questo:
+ {{{
+start --config configfile [eventuali opzioni ...]
+ }}}
+
+ * sicurezza: usando il protocollo rysnc nativo il traffico non e`
+ criptato, usando ssh si ma le prestazioni decadono e c'e` il problema
+ di garantire un accesso ssh senza password dal client al server
+ (pessima soluzione), usando protocollo rsync + VPN si ha traffico
+ criptato per definizione
+
+ * sicurezza: il servizio di rete non presenta problemi di sicurezza,
+ il massimo che puo` capitare e` che venga attivato il backup (che se
+ non c'e` il disco di backup montato comunque abortisce)
+
+ * sicurezza: una tecnica di DNS poisoning puo` permettere di lanciare
+ il backup sul client e dirottarlo su una macchina che non e` il backup
+ server effetivo; dato pero` che la configurazione di un backup di
+ questo tipo prevede l'utilizzo di soli host interni (o virtualmente
+ interni tramite vpn) il DNS poisoning puo` avvenire solo se si ha
+ un accesso come root alla macchina client o peggio ancora al server
+ dns interno (authserver), in questo caso la falla di sicurezza non
+ e` nella procedura di backup ma altrove (se si ha l'accesso come
+ root al client non c'e` bisogno del backup per copiare roba, se si
+ ha accesso root all'authserver o si e` autorizzati o significa
+ che l'intero network e` compromesso)
+
+ * sicurezza: l'ultima versione del backup prevede che la configurazione
+ di rsync sul server sia gestita in questo modo:
+
+  * ciascuna macchina remota ha il suo slot specifico
+  * il nome dello slot ha nel nome un UUID, generato random al
+  momento della configuazione
+  * il nome dello slot viene inviato al client durante l'attivazione
+  del backup (kubackup-net da xinetd)
+
+ in questo modo la gestione dello slot (quindi anche della locazione
+ fisica dove il singolo backup andra` a finire) e` compito interamente
+ del server, come e` corretto che sia;
+
+ inoltre la gestione tramite UUID rende quasi impossibile attivare un
+ backup utilizzando uno slot improprio; se si ha accesso come root sul
+ client, al massimo si puo` ricavare l'UUID utilizzato (monitorando il
+ processo di attivazione del backup), che non e` di molta utilita`, al
+ massimo si puo` forzare l'esecuzione di un backup sul proprio slot
+
+ * sicurezza: ci puo` essere un reale problema di abuso di risorse,
+ legato a questa situzione: 
+  * sul client, con accesso root, ricavo UUID e ip address del mio client
+  * sostituisco il client con un'altra macchina, o aggiungo filesystems
+  al file di config locale del backup, o ancora lancio manualmente rysnc
+  con i parametri adeguati
+  * lancio quindi un backup di dimensioni abnormi, con questi effetti:
+   * DDOS (sovraccarico della rete)
+   * fillup del disco di backup (se questo e` montato), oppure
+   * fillup del disco di sistema (se il disco di backup non e` montato)
+
+ al momento questo tipo di problema non si pone, se si utilizza com'e`
+ previsto, il sistema automatico di mount/umount/remount dei dischi
+ USB sul server, infatti il disco di backup e` sempre montato, ma in
+ readonly, e viene rimontato readwrite solo durante l'esecuzione
+ del backup (quindi un mirror non iniziato dal server abortisce
+ immediatamente); rimane aperta una finestra temporale che e` quella,
+ appunto, dell'esecuzione del backup da parte del server
+
+== future enanchements ==
+
+ * per risolvere i problemi di sicurezza legati al DDOS:
+
+  * rsync lato server sara` attivato su un config file apposito,
+  temporaneo, relativo al client corrente, e quindi attivo solo
+  nel preciso momento del lancio del backup
+
+  * rsync lato server sara` attivato su una porta random,
+  passata on the fly al client durante il lancio
+ 
+ * valutare eventuale meccanismo di lancio parallelo di copie,
+ valutare se e` realmente utile (dato che i processi sono
+ network-bound, quando capita, nella realta`, di avere client
+ su differenti network fisici e che quindi non interferiscono
+ tra loro?)

@@ -1,0 +1,63 @@
+#!/bin/bash
+#
+# ::copy1::
+# ::copy2::
+#
+CMD=$(basename "$0")
+CMDVER="1.9"
+CMDSTR="$CMD v$CMDVER (2024-09-07)"
+
+set -e -u
+
+
+usage()
+{
+	echo "
+== $CMDSTR == watch current backup infos ==
+
+usage: $CMD [-lines] [interval]
+
+options:
+  . a positive number is used as refresh interval, in seconds
+    default is $interval sec
+  . a negative number -N is used to display last N lines of
+    current backup logfile, default is $lines
+" >&2
+	exit 1
+}
+
+
+# (MAIN)
+
+interval='2'
+lines='-10'
+
+while [ $# != 0 ]
+do
+	case ${1:-} in
+	  "")		;;
+	  [1-9]*)	interval=$1 ;;
+	  -[0-9]*)	lines=$1 ;;
+	  *)		usage ;;
+	esac
+	shift
+done
+
+# get current cmdline config
+#
+lastrun=$(grep ' STARTED ' /var/log/kubackup-run | tail -1)
+case $lastrun in
+ *" -c "*|*" --config "*)
+ 	cfg=$(echo "$lastrun" | sed -e 's/.* -c //' -e 's/ --config //' -e 's/ .*//')
+	cfg="--config $cfg"
+	;;
+ *)
+ 	cfg=""
+esac
+
+# get current workdir
+#
+workdir=$(kubackup-getconf $cfg 'workdir')
+
+cd "$workdir"
+exec watch --interval $interval ${CMD}-cmd $lines

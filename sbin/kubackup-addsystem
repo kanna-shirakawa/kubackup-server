@@ -1,0 +1,244 @@
+#!/bin/bash
+#
+# __copy1__
+# __copy2__
+#
+CMD=$(basename $0)
+CMDVER="3.1"
+CMDSTR="$CMD v$CMDVER (2021/04)"
+
+set -e -u
+
+usage()
+{
+	echo "
+usage: $CMD [options] system
+
+options:
+ -f|--force		overwrite existing systems UUID
+ -g|--group grp		define group for system (multiple allowed)
+ -h|--hostname name	define hostname (default: system argument)
+ -d|--slot dir		define destination directory (slot)
+ -s|--strict		bind each rsync module to actual system ip address
+ -c|--config FILE	use 'FILE' instead of $CfgFile; can be a full path
+  			or will be searched as /etc/$BaseCmd-FILE or
+  			/etc/$BaseCmd-FILE.conf
+
+" >&2
+	[ $# != 0 ] && {
+		echo -e "\n$*\n" >&2
+	}
+	exit 1
+}
+
+cleanup()
+{
+	[ "X$TmpFile" != "X" ] && rm -f "$TmpFile"
+	return 0
+}
+
+
+sysname_to_ip()
+{
+	local ip=$(host $1 2>/dev/null | grep 'has address' \
+		| sed -e 's/.*has address //')
+	[ "$ip" != "" ] && {
+		echo "$ip"
+		return 0
+	}
+	return 1
+}
+
+# (MAIN)
+
+trap 'echo -e "\nunexpected error $? at $LINENO\n" >&2' ERR
+trap 'cleanup' EXIT
+
+BaseCmd="kubackup-run"
+CfgFile=/etc/$BaseCmd.conf
+
+# saves env overrides
+#
+env_confdir=${CONFDIR:-}
+CONFDIR="/etc/kubackup"
+TmpFile=
+
+uuid=
+address=
+slot=
+rotations=
+groups=
+allow=
+cache=
+precedence=
+timeout=
+
+
+# args
+#
+system=
+new_groups=
+new_slot=
+new_address=
+
+f_force=false
+f_strict=false
+
+[ -f $CfgFile ] && {
+	. $CfgFile || exit $?
+}
+
+while [ $# != 0 ]
+do
+    case $1 in
+	-g|--group)	[ $# -lt 2 ] && usage "--group requires an argument"
+			new_groups="$new_groups $2"
+			shift
+			;;
+	-d|--slot)	[ $# -lt 2 ] && usage "--slot requires an argument"
+			new_slot=$2
+			shift
+			;;
+	-h|--hostname)	[ $# -lt 2 ] && usage "--hostname requires an argument"
+			new_address=$2
+			shift
+			;;
+
+	-f|--force)	f_force=true ;;
+	-s|--strict)	f_strict=true ;;
+
+	-c|--config)	[ $# -lt 2 ] && usage
+			CfgFile=$2
+			[ -f $CfgFile ] || { CfgFile=/etc/$BaseCmd-$2.conf; }
+			[ -f $CfgFile ] || {
+				echo "error: can't find config file '$2' or /etc/$BaseCmd-$2.conf" >&2
+				exit 1
+			}
+			. $CfgFile || exit $?
+			shift
+			;;
+    	-*|"")		usage "invalid option '$1'" ;;
+	*)		[ "X$system" != "X" ] && usage "you can add only one system at time"
+			system=$1
+			;;
+    esac
+    shift
+done
+[ "X$system" = "X" ] && usage "missing 'system' argument"
+
+# defaults
+#
+address=${address:-$system}
+
+# apply env overrides
+#
+[ "X$env_confdir" != "X" ] && CONFDIR=$env_confdir
+
+# sanity checks
+#
+[ "$CONFDIR" = "" ]	&& { echo "error: must define CONFDIR in $CfgFile" >&2; exit 1; }
+[ -d $CONFDIR ] || {
+	echo "confdir $CONFDIR not found" >&2
+	exit 1
+}
+cd $CONFDIR
+
+
+printf "  %-16s " $system
+
+# create/update UUID?
+#
+if [ -f $CONFDIR/$system.conf ]
+then
+	. $CONFDIR/$system.conf
+
+	if $f_force
+	then
+		tag="change"
+		uuid=$(uuidgen)
+	else
+		tag="keep"
+	fi
+else
+	tag="new"
+	uuid=$(uuidgen)
+fi
+printf "%-32s" "$uuid ($tag)  "
+
+
+# add/update groups?
+#
+TmpFile=$(mktemp /tmp/$CMD-XXXXXXXX)
+
+[ "X$new_groups" != "X" ] && {
+	:>$TmpFile
+
+	# save actual groups, if any
+	for grp in $groups
+	do
+		echo $grp >>$TmpFile
+	done
+
+	# add arguments groups
+	for grp in $new_groups
+	do
+		grep -q "^$grp$" $TmpFile || echo "$grp" >>$TmpFile
+	done
+	printf "%2d groups  " $(wc -l <$TmpFile)
+	groups=$(cat $TmpFile)
+	groups=$(echo $groups)	# listing
+}
+
+# strict ip access?
+#
+$f_strict && {
+	ips=$(sysname_to_ip $system) || {
+		echo "NO IP FOUND! DISABLED"
+		:> $CONFDIR/${system}_disabled
+		continue
+	}
+	:>$TmpFile
+	for ip in $ips
+	do
+		echo $ip >>$TmpFile
+	done
+	allow=$(sort -u $TmpFile)
+	allow=$(echo $allow)	# listing
+	echo -n $ips
+}
+
+# apply single value arguments
+#
+slot=${new_slot:-$slot}
+address=${new_address:-$address}
+
+
+echo "# $CONFDIR/$system.conf
+#
+uuid='$uuid'
+address='$address'" >$TmpFile
+dash=; [ "X$slot" = "X" ]	&& dash="#"; echo "${dash}slot='$slot'" >>$TmpFile
+dash=; [ "X$rotations" = "X" ]	&& dash="#"; echo "${dash}rotations='$rotations'" >>$TmpFile
+dash=; [ "X$groups" = "X" ]	&& dash="#"; echo "${dash}groups='$groups'" >>$TmpFile
+dash=; [ "X$allow" = "X" ]	&& dash="#"; echo "${dash}allow='$allow'" >>$TmpFile
+dash=; [ "X$cache" = "X" ]	&& dash="#"; echo "${dash}cache='$cache'" >>$TmpFile
+dash=; [ "X$precedence" = "X" ]	&& dash="#"; echo "${dash}precedence='$precedence'" >>$TmpFile
+dash=; [ "X$timeout" = "X" ]	&& dash="#"; echo "${dash}timeout='$timeout'" >>$TmpFile
+
+out=$system.conf
+
+if [ -f $out ]
+then
+	if cmp $TmpFile $out >/dev/null
+	then
+		echo "unchanged"
+	else
+		echo "updated"
+		cat $TmpFile >$out
+	fi
+else
+	cat $TmpFile >$out
+	echo
+fi
+
+exit 0
