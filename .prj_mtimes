@@ -1,4 +1,4 @@
-.|1743765468|kanna
+.|1743775755|kanna
 sbin|1741859473|kanna
 sbin/kubackup-getconf|1726840221|kanna
 sbin/kubackup-addsystem|1619016407|kanna
@@ -18,7 +18,7 @@ sbin/kubackup-update-rsync|1541340060|kanna
 sbin/kubackup-export-mktar|1645622909|kanna
 sbin/mountpoint.sh|1535185919|kanna
 sbin/kubackup-watch-cmd|1725745932|kanna
-README.md|1743763475|kanna
+README.md|1743775718|kanna
 ex-pre|1590322390|kanna
 ex-pre/include-pre-script|1585668890|kanna
 ex-pre/dump|1585668404|kanna
@@ -78,7 +78,7 @@ ku/install.sh|1648228205|kanna
 ku/history|1743763645|kanna
 ku/hw-error-report.txt|1351379462|kanna
 ku/install|1743763606|kanna
-.jtscm-autosync.lock|1743765468|kanna
+.jtscm-autosync.lock|1743775755|kanna
 debian|1743763649|kanna
 debian/preinst|1743763645|kanna
 debian/compat|1693225649|kanna

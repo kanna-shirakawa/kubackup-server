@@ -27,3 +27,18 @@ to manage it is using kusa integration
 note: this package uses 'mirror' command, from ku-file-utils package;
 if you want to avoid ku-file-utils dependendacy, a copy of 'mirror'
 script is the documentation directory
+
+---
+
+# releases
+
+you can get prebuilt .deb packages from here: https://repos.kubit.ch
+
+---
+
+# note
+
+The original projects started a lot of time ago, and I was not fluent
+in english, so ... the internal comments and (*gasp!*) the manpages
+are in italian only, and somewhat outdated. Hope to have time to
+fix this mess.
