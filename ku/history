@@ -1,3 +1,13 @@
+2025-04-04 12:47:24 3.0 ku25.04a Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>
+
+  * PACKAGE UPLOADED ON GITHUB
+
+  * mirror script
+    - add: this package depends from ku-file-utils; the only command used is
+    	   'mirror', a bash frontend to rsync, if you want to avoid install
+	   ku-file-utils, a copy of 'mirror' script in the documentation
+	   directory
+
 2025-03-13 10:53:31 3.0 ku25.03a Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>
 
   * sbin/kubackup-systems

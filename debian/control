@@ -11,7 +11,7 @@ Architecture: all
 Depends: ${misc:Depends}, ku-file-utils, rsync, uuid-runtime
 Description: KUBiC Labs rsync network backup (server)
  kubackup is a network backup system, based on rsync; is tailored for
- ubuntu distribution, but with some limitations can backup windows
+ Linux systems, but with some limitations can backup Windows(tm)
  machines too (ie: using DeltaCopy porting of rsync), and potentially
  every system that can make use of rsync program
  .

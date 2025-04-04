@@ -1,8 +1,20 @@
+kubackup-server (3.0-ku25-04a) unstable; urgency=low
+
+  * PACKAGE UPLOADED ON GITHUB
+
+  * mirror script
+    - add: this package depends from ku-file-utils; the only command used is
+    	   'mirror', a bash frontend to rsync, if you want to avoid install
+	   ku-file-utils, a copy of 'mirror' script in the documentation
+	   directory
+
+
+ -- Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>  Fri, 04 Apr 2025 12:47:24 +0200
+
 kubackup-server (3.0-ku25-03a) unstable; urgency=low
 
   * sbin/kubackup-systems
     - upd: minor cosmetic changes
-
 
  -- Lorenzo Canovi (KUBiC Labs, CH) <packager@kubiclabs.com>  Thu, 13 Mar 2025 10:53:31 +0100
 

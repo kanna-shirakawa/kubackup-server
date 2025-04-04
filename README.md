@@ -23,3 +23,7 @@ backup machines
 note: actually it misses a console management (ie: a web based one),
 all the setup and management must be done via ssh; the best way
 to manage it is using kusa integration
+
+note: this package uses 'mirror' command, from ku-file-utils package;
+if you want to avoid ku-file-utils dependendacy, a copy of 'mirror'
+script is the documentation directory
